@@ -72,7 +72,7 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
     for(size_t _q = 1; _q < height; ++_q){
         for(size_t _c = 1; _c < width-1; ++_c){
-            if (offset_c + _c-1+_q-1 < 0 || offset_c + _c-1+_q-1 > c_end)
+            if (offset_c + _c-1+_q-1 < 0 || offset_c + _c-1+_q-1 >= c_len)
             {
                 continue;
             }
