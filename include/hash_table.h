@@ -2,6 +2,7 @@
 
 #include "params.h"
 #include "util.h"
+#include <cuda_runtime.h>
 
 struct KeyValue
 {
@@ -19,5 +20,6 @@ struct Task
 const uint32_t kEmpty = 0xffffffff;
 
 KeyValue *create_hashtable(size_t size);
+KeyValue *create_hashtable_async(size_t size, cudaStream_t& s);
 
 void destroy_hashtable(KeyValue *hashtable);
