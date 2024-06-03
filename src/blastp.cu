@@ -270,7 +270,8 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     uint32_t *task_num_dev[NUM_STREAM];
     for (int s = 0; s < NUM_STREAM; s++)
     {
-        pHashTable[s] = create_hashtable(max_hashtable_capacity);
+        // pHashTable[s] = create_hashtable(max_hashtable_capacity);
+        // pHashTable[s] = create_hashtable(max_hashtable_capacity,&streams[s]);
         CUDA_CALL(cudaMalloc((void **)&task_dev[s], MAX_FILTER_TASK * sizeof(Task)));
         CUDA_CALL(cudaMemset(task_dev[s], 0, MAX_FILTER_TASK * sizeof(Task)));
         CUDA_CALL(cudaMalloc((void **)&task_num_dev[s], sizeof(uint32_t)));
@@ -348,6 +349,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         for (int s = 0; s < NUM_STREAM; s++)
         {
             CUDA_CALL(cudaStreamCreate(&streams[s]));
+            pHashTable[s] = create_hashtable_async(max_hashtable_capacity,streams[s]);
             // printf("start stream %d\n", s);
             size_t s_length_stream = s_length[s];
             size_t s_length_stream_byte = s_length_stream / 8 * 5;
@@ -387,6 +389,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             }
             s_begin += s_length_stream_byte;
             cout << "=";
+            cudaFreeAsync(pHashTable[s],streams[s]);
         }
 
         CUDA_CALL(cudaDeviceSynchronize());
@@ -466,7 +469,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
     for (int s = 0; s < NUM_STREAM; s++)
     {
-        destroy_hashtable(pHashTable[s]);
+        // destroy_hashtable(pHashTable[s]);
         CUDA_CALL(cudaFree(task_dev[s]));
         CUDA_CALL(cudaFree(task_num_dev[s]));
     }
