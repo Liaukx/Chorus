@@ -23,3 +23,4 @@ KeyValue *create_hashtable(size_t size);
 KeyValue *create_hashtable_async(size_t size, cudaStream_t& s);
 
 void destroy_hashtable(KeyValue *hashtable);
+void destroy_hashtable_async(KeyValue *hashtable, cudaStream_t& s);

@@ -26,6 +26,28 @@ KeyValue *create_hashtable(size_t size)
 
     return hashtable;
 }
+KeyValue *create_hashtable_async(size_t size, cudaStream_t& s)
+{
+    cudaError_t cudaStatus;
+    // Allocate memory
+    KeyValue *hashtable;
+    cudaStatus = cudaMallocAsync(&hashtable, sizeof(KeyValue) * size,s);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "create_hashtable cudaMalloc err %s\n", cudaGetErrorString(cudaStatus));
+        return nullptr;
+    }
+
+    // Initialize hash table to empty
+    static_assert(kEmpty == 0xffffffff, "memset expected kEmpty=0xffffffff");
+    cudaStatus = cudaMemsetAsync(hashtable, 0xff, sizeof(KeyValue) * size,s);
+    if (cudaStatus != cudaSuccess)
+    {
+        fprintf(stderr, "create_hashtable cudaMemset err %d\n", cudaStatus);
+    }
+
+    return hashtable;
+}
 
 // Iterate over every item in the hashtable; return non-empty key/values
 // __global__ void gpu_iterate_hashtable(KeyValue *pHashTable, KeyValue *kvs, uint32_t *kvs_size)
@@ -103,4 +125,8 @@ KeyValue *create_hashtable(size_t size)
 void destroy_hashtable(KeyValue *pHashTable)
 {
     cudaFree(pHashTable);
+}
+void destroy_hashtable_async(KeyValue *pHashTable,cudaStream_t& s)
+{
+    cudaFreeAsync(pHashTable,s);
 }
