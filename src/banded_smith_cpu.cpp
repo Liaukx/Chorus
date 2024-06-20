@@ -2,32 +2,6 @@
 // #include <libunwind.h>
 // #include <gperftools/tcmalloc.h>
 
-#define max2(m, n) ((m) > (n) ? (m) : (n))
-#define max3(m, n, p) ((m) > (n) ? ((m) > (p) ? (m) : (p)) : ((n) > (p) ? (n) : (p)))
-#define MASK5(v) (v & 0b11111)
-#define END 0
-#define TOP 1
-#define LEFT 2
-#define DIAG 3
-
-// mutex mu1;
-
-typedef struct
-{
-    int d;
-    int x; // top
-    int y; // left
-    int m; // left top
-    int s;
-} record;
-
-inline char get_char(const char *s, size_t offset)
-{
-    size_t n_bit = offset * 5;
-    return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
-}
-
-
 void generate_report(SWResult *res, const char* q, const char* c){
     size_t len = res->s_res.size();
     res->align_length = len;
