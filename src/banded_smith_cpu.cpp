@@ -98,17 +98,14 @@ void generate_report(SWResult *res, const char* q, const char* c){
     }
 }
 
-void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
+void cpu_kernel(const int idx, SWResult *res, 
+                const char *q, const char* c, 
+                size_t c_len, uint32_t q_idx, uint32_t n,
+                uint32_t diag, const int band_width)
 {
-    const char *q = sw_task->q;
-    const char *c = sw_task->c;
-    size_t c_len = sw_task->c_len;
-    size_t q_idx = sw_task->q_idxs[idx];
-    size_t n = sw_task->q_lens[idx];
-    size_t diag = sw_task->diags[idx]; //  pos of c at end of q
+
     int64_t c_begin = (int64_t)diag - band_width - n + 2;
     size_t c_end = diag + band_width;
-    
     if (has_must_include)
     {
         if (!check_include(c, c_begin, c_end))
@@ -204,15 +201,6 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
     }
 
-    // for (int i = 0; i < height; i++)
-    // {
-    //     for (int j = 0; j < width; j++)
-    //     {
-    //         cout << s[j * height + i] << "\t";
-    //     }
-    //     cout << endl;
-    // }
-
     res->score = Score;
     assert(res->score != 0);
 
@@ -241,9 +229,23 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
     reverse(res->q_res.begin(), res->q_res.end());
     reverse(res->s_res.begin(), res->s_res.end());
-    generate_report(res,q, c);
+    generate_report(res,q,c);
+}
+
+void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
+{
+    const char *q = sw_task->q;
+    const char *c = sw_task->c;
+    size_t c_len = sw_task->c_len;
+    size_t q_idx = sw_task->q_idxs[idx];
+    size_t n = sw_task->q_lens[idx];
+    size_t diag = sw_task->diags[idx]; //  pos of c at end of q
+    int64_t c_begin = (int64_t)diag - band_width - n + 2;
+    size_t c_end = diag + band_width;
+    cpu_kernel(idx,res,q,c,c_len,q_idx,n,diag,band_width);
 
 }
+
 // void banded_smith_waterman(const char *q, const char *c, vector<uint32_t> &q_idxs, vector<uint32_t> &q_lens, vector<size_t> &diags, size_t c_len, size_t num_task, vector<SWResult> &res, ThreadPool *pool, vector<future<int>> &rs)
 // {
 // mu1.lock();
