@@ -134,7 +134,7 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
     size_t diag = sw_task->diags[idx]; //  pos of c at end of q
     int64_t c_begin = (int64_t)diag - band_width - n + 2;
     size_t c_end = diag + band_width;
-
+    
     if (has_must_include)
     {
         if (!check_include(c, c_begin, c_end))
@@ -149,9 +149,14 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
     // short *s = (short *)malloc(width * height * sizeof(short));
     // char *p = (char *)malloc(width * height * sizeof(char));
-    record *r = (record *)malloc(width * height * sizeof(record));
 
-    if (r == nullptr)
+    int tileSize = 2;
+    size_t t_height = tileSize + 1;
+    
+    record *rt = (record *)malloc(width * t_height * sizeof(record));
+    int *rd = (int *)malloc(width * height * sizeof(int));
+
+    if (rd == nullptr || rt == nullptr)
     {
         printf("CPU out of memory!\n");
         exit(-1);
@@ -160,71 +165,69 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
     // memset(s, 0, width * height * sizeof(short));
     // memset(p, 0, width * height * sizeof(char));
-    memset(r, 0, width * height * sizeof(record));
+    memset(rt, 0, width * t_height * sizeof(record));
+    memset(rd, 0, width * height * sizeof(int));
 
     size_t max_q = 0;
     size_t max_c = 0;
-    
-    size_t offset_q = q_idx, offset_c = c_begin;
+    int score = 0, Score = 0;
+    // cal maxScore and it's position
+    for(size_t it = 0; it * tileSize < n; it ++){
+        
+        size_t q_offset = it * tileSize;
 
-    for(size_t _q = 1; _q < height; ++_q){
-        for(size_t _c = 1; _c < width-1; ++_c){
-            if (offset_c + _c-1+_q-1 < 0 || offset_c + _c-1+_q-1 >= c_len)
-            {
-                continue;
+        for(size_t _q = 1; _q < t_height && q_offset + _q < height; ++_q){
+            for(size_t _c = 1; _c < width-1; ++_c){
+                
+                if(c_begin + _c-1+ q_offset + _q-1 < 0) continue;
+                if(c_begin + _c-1+ q_offset + _q-1 >= c_len) break;
+
+                char chq = q[q_idx + q_offset + _q-1];
+                char chc = get_char(c, c_begin + q_offset + _c-1 + _q-1);
+                
+                if (chq == END_SIGNAL || chc == END_SIGNAL)
+                {
+                    continue;
+                }
+
+                rt[_q * width + _c].x = max3(rt[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  rt[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
+                rt[_q * width + _c].y = max3(rt[_q * width + (_c - 1)].y + SCORE_GAP_EXT, rt[_q * width + (_c - 1)].m + SCORE_GAP, 0);
+
+                if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                {
+                    // illegal word
+                    rt[_q * width + _c].m = 0;
+                }
+                else
+                {
+                    rt[_q * width + _c].m = max2(max3(rt[(_q - 1) * width + _c].x, rt[(_q - 1) * width + _c].y, rt[(_q - 1) * width + _c].m) + BLOSUM62[chq * 26 + chc], 0);
+                }
+
+                score = max3(rt[_q * width + _c].x, rt[_q * width + _c].y, rt[_q * width + _c].m);
+                // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
+                
+                if (score != 0)
+                {
+                    if (score == rt[_q * width + _c].x)
+                        rd[_c * height + _q + q_offset] = TOP;
+                    if (score == rt[_q * width + _c].y)
+                        rd[_c * height + _q + q_offset] = LEFT;
+                    if (score == rt[_q * width + _c].m)
+                        rd[_c * height + _q + q_offset] = DIAG;
+                }
+                if (Score < score)
+                {
+                    Score = score;
+                    max_c = _c;
+                    max_q = _q + q_offset;
+                }
+                // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
             }
-
-            char chq = q[offset_q + _q-1];
-            char chc = get_char(c, offset_c + _c-1+_q-1);
-            
-            if (chq == END_SIGNAL || chc == END_SIGNAL)
-            {
-                continue;
-            }
-
-            assert(_q * width + _c < width * height);
-            assert(_q - 1 >= 0);
-            assert(_c + 1 < height);
-            assert(_c - 1 >= 0);
-
-            r[_c * height + _q].x = max3(r[(_c + 1) * height + (_q - 1)].x + SCORE_GAP_EXT,  r[(_c + 1) * height + (_q - 1)].m + SCORE_GAP, 0);
-            r[_c * height + _q].y = max3(r[(_c - 1) * height + _q].y + SCORE_GAP_EXT, r[(_c - 1) * height + _q].m + SCORE_GAP, 0);
-            // r[_q * width + _c].x = max3(r[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  r[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
-            // r[_q * width + _c].y = max3(r[_q * width + (_c - 1)].y + SCORE_GAP_EXT, r[_q * width + (_c - 1)].m + SCORE_GAP, 0);
-
-            if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
-            {
-                // illegal word
-                // r[_q * width + _c].m = 0;
-                r[_c * height + _q].m = 0;
-            }
-            else
-            {
-                // r[_q * width + _c].m = max2(max3(r[(_q - 1) * width + _c].x, r[(_q - 1) * width + _c].y, r[(_q - 1) * width + _c].m) + BLOSUM62[chq * 26 + chc], 0);
-                r[_c * height+ _q].m = max2(max3(r[_c * height + (_q - 1)].x, r[_c * height + (_q - 1)].y, r[_c * height + (_q - 1)].m) + BLOSUM62[chq * 26 + chc], 0);
-            }
-
-            // r[_q * width + _c].s = max3(r[_q * width + _c].x, r[_q * width + _c].y, r[_q * width + _c].m);
-            r[_c * height + _q].s = max3(r[_c * height + _q].x, r[_c * height + _q].y, r[_c * height + _q].m);
-            // printf("(q = %c,c = %c) BLOSUM62 = %d r[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], r[_q * width + _c].s);
-            
-            if (r[_c * height + _q].s != 0)
-            {
-                if (r[_c * height + _q].s == r[_c * height + _q].x)
-                    r[_c * height + _q].d = TOP;
-                if (r[_c * height + _q].s == r[_c * height + _q].y)
-                    r[_c * height + _q].d = LEFT;
-                if (r[_c * height + _q].s == r[_c * height + _q].m)
-                    r[_c * height + _q].d = DIAG;
-            }
-
-            if (r[_c * height + _q].s > r[max_c * height + max_q].s)
-            {
-                max_c = _c;
-                max_q = _q;
-            }
-            // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_j * width + max_i].s,r[_q * width + _c].d);
         }
+        memcpy(rt,rt + (t_height - 1) * width ,width * sizeof(record));
+        // Hit when target is not long enough, there are some cells should be zero
+        memset(rt + width, 0, (t_height - 1) *width * sizeof(record));
+
     }
 
     // for (int i = 0; i < height; i++)
@@ -236,51 +239,35 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
     //     cout << endl;
     // }
 
-    // res->score = r[max_q * width + max_c].s;
-    res->score = r[max_c * height + max_q].s;
+    res->score = Score;
     assert(res->score != 0);
 
     size_t cur_q= max_q;
     size_t cur_c = max_c;
     
-    while (r[cur_c * height + cur_q].s > 0)
+    while (rd[cur_c * height + cur_q])
     {
-        switch (r[cur_c * height + cur_q].d)
-    // while (r[cur_q * width + cur_c].s > 0)
-    // {
-    //     switch (r[cur_q * width + cur_c].d)
-        {
-        case DIAG:
-            res->q_res.push_back((cur_q-1) + q_idx);
-            res->s_res.push_back(c_begin + cur_c-1 + cur_q-1);
-            cur_q -= 1;
-            break;
-
-        case TOP:
-            res->q_res.push_back((cur_q-1) + q_idx);
-            res->s_res.push_back(-1);
-            cur_q -= 1;
-            cur_c += 1;
-            break;
-
-        case LEFT:
-            res->q_res.push_back(-1);
-            res->s_res.push_back(c_begin + cur_c-1 + cur_q-1);
-            cur_c -= 1;
-            break;
-
-        default:
-            printf("err\n");
-            break;
-        }
+        int d = rd[cur_c * height + cur_q];
+        int64_t res_q = (d&0x01) ? ((cur_q-1) + q_idx) : -1;
+        int64_t res_c = (d&0x02) ? (c_begin + cur_c-1 + cur_q-1) : -1;
+        
+        res->q_res.push_back(res_q);
+        res->s_res.push_back(res_c);
+        //TOP 01b, left 10b, diag 11b
+        //DIAG : cur_q -= 1
+        //TOP : cur_q -= 1, cur_c += 1;
+        //LEFT : cur_c -= 1
+        cur_q -= (d == DIAG || d == TOP);
+        cur_c += (d == TOP);
+        cur_c -= (d == LEFT);
     }
 
-    free(r);
+    free(rd);
+    free(rt);
 
     reverse(res->q_res.begin(), res->q_res.end());
     reverse(res->s_res.begin(), res->s_res.end());
-
-    generate_report(res,q,c);
+    generate_report(res,q, c);
 
 }
 // void banded_smith_waterman(const char *q, const char *c, vector<uint32_t> &q_idxs, vector<uint32_t> &q_lens, vector<size_t> &diags, size_t c_len, size_t num_task, vector<SWResult> &res, ThreadPool *pool, vector<future<int>> &rs)
