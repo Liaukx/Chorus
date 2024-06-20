@@ -27,6 +27,103 @@ inline char get_char(const char *s, size_t offset)
     return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
 }
 
+
+void generate_report(SWResult *res, const char* q, const char* c){
+    size_t len = res->s_res.size();
+    res->align_length = len;
+    res->bitscore = (E_lambda * res->score - log(E_k)) / (0.69314718055995);
+    char s[len + 1] = {0};
+    char q_seq[len + 1] = {0};
+    char s_ori[len + 1] = {0};
+    char match[len + 1] = {0};
+    int s_ori_len = 0;
+    res->gap_open = 0;
+    res->gaps = 0;
+    bool ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<c_res[t][i]<<" ";
+        if (res->s_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            // printf("res->s_res[i] = %d\n",res->s_res[i]);
+            s[i] = get_char(c, res->s_res[i]) + 65;
+            if (s[i] == 95)
+                s[i] = '*';
+            s_ori[s_ori_len++] = s[i];
+        }
+        else
+        {
+            s[i] = '-';
+            res->gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res->gap_open++;
+            }
+        }
+    }
+
+    if (has_must_include)
+    {
+        string s_ori_str(s_ori, len);
+        if (!check_include(s_ori_str))
+        {
+            res->report = false;
+            return;
+        }
+    }
+    ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<q_res[t][i]<<" ";
+        if (res->q_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            q_seq[i] = q[res->q_res[i]] + 65;
+        }
+        else
+        {
+            q_seq[i] = '-';
+            res->gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res->gap_open++;
+            }
+        }
+    }
+    res->mismatch = 0;
+    res->positive = 0;
+    for (int i = 0; i < len; i++)
+    {
+        match[i]=' ';
+        if (BLOSUM62[(q_seq[i] - 65) * 26 + (s[i] - 65)] > 0 && q_seq[i]!='-' && s[i]!='-')
+        {
+            res->positive++;
+            match[i]='+';
+        }
+        if (q_seq[i] != s[i])
+        {
+            res->mismatch++;
+        }
+        else
+        {
+            match[i]=q_seq[i];
+        }
+            
+    }
+    res->n_identity = res->align_length - res->mismatch;
+    res->p_identity = (1 - (double)res->mismatch / res->align_length) * 100;
+    if (detailed_alignment)
+    {
+        res->q = q_seq;
+        res->s = s;
+        res->s_ori = s_ori;
+        res->match = match;
+    }
+}
+
 void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 {
     const char *q = sw_task->q;
@@ -120,20 +217,6 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
                 if (r[_c * height + _q].s == r[_c * height + _q].m)
                     r[_c * height + _q].d = DIAG;
             }
-            // if (r[_q * width + _c].s != 0)
-            // {
-            //     if (r[_q * width + _c].s == r[_q * width + _c].x)
-            //         r[_q * width + _c].d = TOP;
-            //     if (r[_q * width + _c].s == r[_q * width + _c].y)
-            //         r[_q * width + _c].d = LEFT;
-            //     if (r[_q * width + _c].s == r[_q * width + _c].m)
-            //         r[_q * width + _c].d = DIAG;
-            // }
-            // if (r[_q * width + _c].s > r[max_q * width + max_c].s)
-            // {
-            //     max_c = _c;
-            //     max_q = _q;
-            // }
 
             if (r[_c * height + _q].s > r[max_c * height + max_q].s)
             {
@@ -197,98 +280,7 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
     reverse(res->q_res.begin(), res->q_res.end());
     reverse(res->s_res.begin(), res->s_res.end());
 
-    size_t len = res->s_res.size();
-    res->align_length = len;
-    res->bitscore = (E_lambda * res->score - log(E_k)) / (0.69314718055995);
-    char s[len + 1] = {0};
-    char q_seq[len + 1] = {0};
-    char s_ori[len + 1] = {0};
-    char match[len + 1] = {0};
-    int s_ori_len = 0;
-    res->gap_open = 0;
-    res->gaps = 0;
-    bool ga = false;
-    for (int i = 0; i < len; i++)
-    {
-        // cout<<c_res[t][i]<<" ";
-        if (res->s_res[i] != (size_t)(-1))
-        {
-            ga = false;
-            s[i] = get_char(c, res->s_res[i]) + 65;
-            if (s[i] == 95)
-                s[i] = '*';
-            s_ori[s_ori_len++] = s[i];
-        }
-        else
-        {
-            s[i] = '-';
-            res->gaps++;
-            if (!ga)
-            {
-                ga = true;
-                res->gap_open++;
-            }
-        }
-    }
-
-    if (has_must_include)
-    {
-        string s_ori_str(s_ori, len);
-        if (!check_include(s_ori_str))
-        {
-            res->report = false;
-            return;
-        }
-    }
-    ga = false;
-    for (int i = 0; i < len; i++)
-    {
-        // cout<<q_res[t][i]<<" ";
-        if (res->q_res[i] != (size_t)(-1))
-        {
-            ga = false;
-            q_seq[i] = q[res->q_res[i]] + 65;
-        }
-        else
-        {
-            q_seq[i] = '-';
-            res->gaps++;
-            if (!ga)
-            {
-                ga = true;
-                res->gap_open++;
-            }
-        }
-    }
-    res->mismatch = 0;
-    res->positive = 0;
-    for (int i = 0; i < len; i++)
-    {
-        match[i]=' ';
-        if (BLOSUM62[(q_seq[i] - 65) * 26 + (s[i] - 65)] > 0 && q_seq[i]!='-' && s[i]!='-')
-        {
-            res->positive++;
-            match[i]='+';
-        }
-        if (q_seq[i] != s[i])
-        {
-            res->mismatch++;
-        }
-        else
-        {
-            match[i]=q_seq[i];
-        }
-            
-    }
-    res->n_identity = res->align_length - res->mismatch;
-    res->p_identity = (1 - (double)res->mismatch / res->align_length) * 100;
-    if (detailed_alignment)
-    {
-        res->q = q_seq;
-        res->s = s;
-        res->s_ori = s_ori;
-        res->match = match;
-    }
+    generate_report(res,q,c);
 
 }
 // void banded_smith_waterman(const char *q, const char *c, vector<uint32_t> &q_idxs, vector<uint32_t> &q_lens, vector<size_t> &diags, size_t c_len, size_t num_task, vector<SWResult> &res, ThreadPool *pool, vector<future<int>> &rs)
