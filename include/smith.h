@@ -16,11 +16,9 @@ using namespace std;
 
 typedef struct
 {
-    int d;
     int x; // top
     int y; // left
     int m; // left top
-    int s;
 } record;
 
 inline char get_char(const char *s, size_t offset)
