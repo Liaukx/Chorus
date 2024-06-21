@@ -179,17 +179,11 @@ void cpu_kernel(SWResult *res,
                 }
 
                 score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
-                // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
                 
-                if (score != 0)
-                {
-                    if (score == rt[calIndex(_q,_c,width)].x)
-                        rd[calIndex(_c, _q+q_offset, height)] = TOP;
-                    if (score == rt[calIndex(_q,_c,width)].y)
-                        rd[calIndex(_c, _q+q_offset, height)] = LEFT;
-                    if (score == rt[calIndex(_q,_c,width)].m)
-                        rd[calIndex(_c, _q+q_offset, height)] = DIAG;
-                }
+                rd[calIndex(_c, _q+q_offset, height)] = \
+                    (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                    ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                
                 if (Score < score)
                 {
                     Score = score;

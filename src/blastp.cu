@@ -224,11 +224,11 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
                 if (score != 0)
                 {
                     if (score == rt[_q * width + _c].x)
-                        rd[_c * height + _q + q_offset] = TOP;
+                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = TOP;
                     if (score == rt[_q * width + _c].y)
-                        rd[_c * height + _q + q_offset] = LEFT;
+                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = LEFT;
                     if (score == rt[_q * width + _c].m)
-                        rd[_c * height + _q + q_offset] = DIAG;
+                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = DIAG;
                 }
                 if (Score < score)
                 {
@@ -630,6 +630,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                         SWResult sw_tmp;
                         cpu_kernel(&sw_tmp,query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it + i].q_id],q_groups[g].length[task_host[g_idx][s][it + i].q_id],task_host[g_idx][s][it+i].key,band_width);
                         res_s[g][s][it + i].score = res_h[s][i * MaxAlignLen].score;
+                        // TODO cannot check
                         // assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
                         // assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );             
                         // assert(sw_tmp.score == res_s[g][s][it + i].score );             
@@ -640,7 +641,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 for(size_t it=cpu_start; it < n; it ++){
                     
                     cpu_kernel(&res_s[g][s][it],query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it].q_id],q_groups[g].length[task_host[g_idx][s][it].q_id],task_host[g_idx][s][it].key,band_width);
-                    // generate_report(&res_s[g][s][it],query, subj[s]);
+                    generate_report(&res_s[g][s][it],query, subj[s]);
                 }
                 printf("kernel finished \n");
                 for(size_t it = 0; it < cpu_start; it ++){

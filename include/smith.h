@@ -8,10 +8,12 @@ using namespace std;
 #define max2(m, n) ((m) > (n) ? (m) : (n))
 #define max3(m, n, p) ((m) > (n) ? ((m) > (p) ? (m) : (p)) : ((n) > (p) ? (n) : (p)))
 #define MASK5(v) (v & 0b11111)
+
 #define calIndex(i,j,w) ((i+1)*(w)+(j+1))
 #define calTop(i,j,w) ((i)*(w)+(j+2))
 #define calLeft(i,j,w) ((i+1)*(w)+(j))
 #define calDiag(i,j,w) ((i)*(w)+(j+1))
+
 #define END 0
 #define TOP 1
 #define LEFT 2
@@ -130,7 +132,7 @@ void generate_report(SWResult *res, const char* q, const char* c);
 // void banded_smith_waterman(const char *q, const char *c, vector<uint32_t>& q_idxs, vector<uint32_t>& q_lens, vector<size_t>& diags, size_t c_len, size_t num_task, vector<SWResult> &res, ThreadPool* pool, vector<future<int>>& rs);
 
 void smith_waterman_kernel(const int idx, SWResult *res, SWTasks* sw_task);
-void cpu_kernel(const int idx, SWResult *res, 
+void cpu_kernel (SWResult *res, 
                 const char *q, const char* c, 
                 size_t c_len, uint32_t q_idx, uint32_t n,
                 uint32_t diag, const int band_width);
