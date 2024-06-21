@@ -147,50 +147,54 @@ void cpu_kernel(const int idx, SWResult *res,
         
         size_t q_offset = it * tileSize;
 
-        for(size_t _q = 1; _q < t_height && q_offset + _q < height; ++_q){
-            for(size_t _c = 1; _c < width-1; ++_c){
+        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < height-1; ++_q){
+            for(size_t _c = 0; _c < width-2; ++_c){
                 
-                if(c_begin + _c-1+ q_offset + _q-1 < 0) continue;
-                if(c_begin + _c-1+ q_offset + _q-1 >= c_len) break;
+                if(c_begin + _c+ q_offset + _q < 0) continue;
+                if(c_begin + _c+ q_offset + _q >= c_len) break;
 
-                char chq = q[q_idx + q_offset + _q-1];
-                char chc = get_char(c, c_begin + q_offset + _c-1 + _q-1);
+                char chq = q[q_idx + q_offset + _q];
+                char chc = get_char(c, c_begin + q_offset + _c + _q);
                 
                 if (chq == END_SIGNAL || chc == END_SIGNAL)
                 {
                     continue;
                 }
-
-                rt[_q * width + _c].x = max3(rt[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  rt[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
-                rt[_q * width + _c].y = max3(rt[_q * width + (_c - 1)].y + SCORE_GAP_EXT, rt[_q * width + (_c - 1)].m + SCORE_GAP, 0);
+                //rt(_q,_c) -> (_q+1) * width + _c + 1
+                // logical m(_q,_c).x = max(m(_q-1,_c).x + SCORE_GAP_EXT, m(_q-1,_c).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
+                
+                rt[(_q+1) * width + _c+1].x = max3(rt[(_q) * width + (_c + 2)].x + SCORE_GAP_EXT,  rt[(_q) * width + (_c + 2)].m + SCORE_GAP, 0);
+                rt[(_q+1) * width + _c+1].y = max3(rt[(_q+1) * width + (_c)].y + SCORE_GAP_EXT, rt[(_q+1) * width + (_c)].m + SCORE_GAP, 0);
 
                 if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
                 {
                     // illegal word
-                    rt[_q * width + _c].m = 0;
+                    rt[(_q+1) * width + (_c+1)].m = 0;
                 }
                 else
                 {
-                    rt[_q * width + _c].m = max2(max3(rt[(_q - 1) * width + _c].x, rt[(_q - 1) * width + _c].y, rt[(_q - 1) * width + _c].m) + BLOSUM62[chq * 26 + chc], 0);
+                    rt[(_q+1) * width + (_c+1)].m = max2(max3(rt[(_q) * width + _c+1].x, rt[(_q) * width + _c+1].y, rt[(_q) * width + _c+1].m) + BLOSUM62[chq * 26 + chc], 0);
                 }
 
-                score = max3(rt[_q * width + _c].x, rt[_q * width + _c].y, rt[_q * width + _c].m);
+                score = max3(rt[(_q+1) * width + _c+1].x, rt[(_q+1) * width + _c+1].y, rt[(_q+1) * width + _c+1].m);
                 // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
                 
                 if (score != 0)
                 {
-                    if (score == rt[_q * width + _c].x)
-                        rd[_c * height + _q + q_offset] = TOP;
-                    if (score == rt[_q * width + _c].y)
-                        rd[_c * height + _q + q_offset] = LEFT;
-                    if (score == rt[_q * width + _c].m)
-                        rd[_c * height + _q + q_offset] = DIAG;
+                    if (score == rt[(_q+1) * width + (_c+1)].x)
+                        rd[(_c+1) * height + (_q+1) + q_offset] = TOP;
+                    if (score == rt[(_q+1) * width + (_c+1)].y)
+                        rd[(_c+1) * height + (_q+1) + q_offset] = LEFT;
+                    if (score == rt[(_q+1) * width + (_c+1)].m)
+                        rd[(_c+1) * height + (_q+1) + q_offset] = DIAG;
                 }
                 if (Score < score)
                 {
                     Score = score;
-                    max_c = _c;
-                    max_q = _q + q_offset;
+                    max_c = _c+1;
+                    max_q = _q+1 + q_offset;
                 }
                 // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
             }

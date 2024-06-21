@@ -26,6 +26,60 @@ inline char get_char(const char *s, size_t offset)
     size_t n_bit = offset * 5;
     return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
 }
+
+class record_matrix{
+public:
+    record_matrix(int bw, int TileSize):width(2*bw+1),height(TileSize + 1){
+        data = (record*) malloc(sizeof(record) * height * width);
+        if (data == nullptr)
+        {
+            printf("CPU out of memory!\n");
+            exit(-1);
+            return;
+        }
+        memset(data,0,sizeof(record) * width*height);
+    
+    }
+    const record& get_top(int _q,int _c){
+        return data[_q * width + _c + 2];
+    }
+    const record& get_left(int _q,int _c){
+        return data[(_q+1) * width + _c];
+    }
+    const record& get_diag(int _q,int _c){
+        return data[_q * width + _c+1];
+    }
+    void reset(){
+        memcpy(data,data + (height - 1) * width ,width * sizeof(record));
+        memset(data + width, 0, (height - 1) *width * sizeof(record));
+    }
+    record& operator() (int _q, int _c){
+        return data[(_q+1) *width + (_c+1)];
+    }
+    ~record_matrix(){
+        free(data);
+    }
+    record* data;
+private:
+    int width,height;
+};
+
+class direct_matrix{
+public:
+    direct_matrix(int bw, size_t q_len):width(bw*2 + 1),height(q_len+1){
+        data = (int*) malloc(sizeof(int) * width * height);
+        memset(data,0,width * height * sizeof(int));
+    }
+    
+    direct_matrix(int num, int bw, size_t q_len):width(bw*2 + 1),height(q_len+1), thread_num(num){
+        data = (int*) malloc(sizeof(int) * width * height * num);
+        memset(data,0,width * height * num * sizeof(int));
+    }
+
+private:
+    int width, height, thread_num;
+    int* data;
+};
 void generate_report(SWResult *res, const char* q, const char* c);
 // void smith_waterman(const char *q, const char *c, const size_t *q_idxs, const size_t *q_lens, const size_t *c_idxs, const size_t *c_lens, size_t num_task, vector<SWResult> &res);
 
