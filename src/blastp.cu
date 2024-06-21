@@ -140,6 +140,141 @@ __global__ void filter_kernel(KeyValue *ht, Task *tasks, uint32_t *num_task, uin
     // size_t total_length = kHashTableOffset_dev[group_id][n_query-1] + kHashTableCapacity_dev[group_id][n_query-1];
     // size_t each_length = (total_length-1)/b + 1;
 }
+__global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
+                //  size_t* diags,
+                 Task* task,
+                 const char* q, const char* c, size_t c_len,
+                                int *rd,int band_width, SWResult_d* res, int* BLOSUM62){
+
+    int idx = blockDim.x * blockIdx.x + threadIdx.x;
+    
+    size_t n = q_lens[task[idx].q_id];
+    assert( n < MaxQueryLen);
+   
+    size_t q_idx  = q_idxs[task[idx].q_id];
+    size_t diag  = task[idx].key;
+    
+    int64_t c_begin = (int64_t)diag - band_width - n + 2;
+    size_t c_end = diag + band_width;
+    size_t c_len_cur = c_end - (c_begin < 0 ? 0:c_begin);
+
+    
+    __shared__ int shared_BLOSUM62[26 * 26];
+    
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < 26 * 26; ++i) {
+            shared_BLOSUM62[i] = BLOSUM62[i];
+        }
+
+    }
+    __syncthreads(); // Wait for the copy to compl .ete
+    size_t width = 2 * band_width + 1;
+    size_t height = n + 1;
+
+    
+    size_t t_height = TILE_SIZE + 1;
+    
+    record *rt = (record *)malloc(width * t_height * sizeof(record));
+    assert(width * height < (MaxQueryLen+1) * (2*band_width + 1));
+
+    // memset(s, 0, width * height * sizeof(short));
+    // memset(p, 0, width * height * sizeof(char));
+    memset(rt, 0, width * t_height * sizeof(record));
+    int direct_matrixSize = (MaxQueryLen+1) * (2*band_width + 1);
+    memset((rd + idx*direct_matrixSize), 0, direct_matrixSize * sizeof(int));
+
+    size_t max_q = 0;
+    size_t max_c = 0;
+    int score = 0, Score = 0;
+    // cal maxScore and it's position
+    for (size_t it = 0; it * TILE_SIZE < n; it++) {
+        
+        size_t q_offset = it * TILE_SIZE;
+
+        for(size_t _q = 1; _q < t_height && q_offset + _q < height; ++_q){
+            for(size_t _c = 1; _c < width-1; ++_c){
+                
+                if(c_begin + _c-1+ q_offset + _q-1 < 0) continue;
+                if(c_begin + _c-1+ q_offset + _q-1 >= c_len) break;
+
+                char chq = q[q_idx + q_offset + _q-1];
+                char chc = get_char_d(c, c_begin + q_offset + _c-1 + _q-1);
+                
+                if (chq == END_SIGNAL || chc == END_SIGNAL)
+                {
+                    continue;
+                }
+
+                rt[_q * width + _c].x = max3(rt[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  rt[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
+                rt[_q * width + _c].y = max3(rt[_q * width + (_c - 1)].y + SCORE_GAP_EXT, rt[_q * width + (_c - 1)].m + SCORE_GAP, 0);
+
+                if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                {
+                    // illegal word
+                    rt[_q * width + _c].m = 0;
+                }
+                else
+                {
+                    rt[_q * width + _c].m = max2(max3(rt[(_q - 1) * width + _c].x, rt[(_q - 1) * width + _c].y, rt[(_q - 1) * width + _c].m) + shared_BLOSUM62[chq * 26 + chc], 0);
+                }
+
+                score = max3(rt[_q * width + _c].x, rt[_q * width + _c].y, rt[_q * width + _c].m);
+                // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
+                // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == rt[_q * width + _c].x)*TOP + (score == rt[_q * width + _c].y)*LEFT + (rt[_c * height + _q + q_offset].m)*DIAG; 
+                if (score != 0)
+                {
+                    if (score == rt[_q * width + _c].x)
+                        rd[_c * height + _q + q_offset] = TOP;
+                    if (score == rt[_q * width + _c].y)
+                        rd[_c * height + _q + q_offset] = LEFT;
+                    if (score == rt[_q * width + _c].m)
+                        rd[_c * height + _q + q_offset] = DIAG;
+                }
+                if (Score < score)
+                {
+                    Score = score;
+                    max_c = _c;
+                    max_q = _q + q_offset;
+                }
+                // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
+            }
+        }
+        memcpy(rt,rt + (t_height - 1) * width ,width * sizeof(record));
+        // Hit when target is not long enough, there are some cells should be zero
+        memset(rt + width, 0, (t_height - 1) *width * sizeof(record));
+
+    }
+
+    
+    (res+ idx*MaxAlignLen)->score = Score;
+    assert((res+ idx*MaxAlignLen)->score != 0);
+
+    size_t cur_q= max_q;
+    size_t cur_c = max_c;
+    int cnt_q = 0, cnt_c = 0;
+    assert(rd + idx*direct_matrixSize +cur_c * height + cur_q< rd + BatchSize*direct_matrixSize);
+    while ((rd + idx*direct_matrixSize)[cur_c * height + cur_q])
+    {
+        int d = (rd + idx*direct_matrixSize)[cur_c * height + cur_q];
+        int64_t res_q = (d&0x01) ? ((cur_q-1) + q_idx) : -1;
+        int64_t res_c = (d&0x02) ? (c_begin + cur_c-1 + cur_q-1) : -1;
+        
+        (res+ idx*MaxAlignLen)->q_res_d[cnt_q ++] = (res_q);
+        (res+ idx*MaxAlignLen)->s_res_d[cnt_c ++] = (res_c);
+        //TOP 01b, left 10b, diag 11b
+        //DIAG : cur_q -= 1
+        //TOP : cur_q -= 1, cur_c += 1;
+        //LEFT : cur_c -= 1
+        cur_q -= (d == DIAG || d == TOP);
+        cur_c += (d == TOP); // Increment cur_c if TOP (01b)
+        cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+    }
+    free(rt);
+
+    (res+ idx*MaxAlignLen)->qlen = cnt_q;
+    (res+ idx*MaxAlignLen)->clen = cnt_c;
+}
+
 
 #ifdef USE_GPU_SW
 void handle_results(cudaEvent_t &stream, Task *task_host, uint32_t *num_task, QueryGroup &q_group, size_t s_length, int stream_id, vector<SWResult> &res, SWTasks &sw_task)
@@ -253,6 +388,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     uint32_t *q_lengths_dev[n_groups];
     uint8_t *index_size_dev[n_groups];
     uint32_t *threshold_dev[n_groups];
+    uint32_t *q_offset_dev[n_groups];
 
     uint32_t kHashTableCapacity_host[MAX_GROUPS_PER_ROUND][MAX_QUERY_PER_GROUP];
     uint32_t kHashTableOffset_host[MAX_GROUPS_PER_ROUND][MAX_QUERY_PER_GROUP];
@@ -262,16 +398,17 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         CUDA_CALL(cudaMalloc((void **)&q_num_dev[g], qit_length * qit_width * sizeof(int)));
         CUDA_CALL(cudaMalloc((void **)&q_idx_dev[g], qit_length * qit_width * sizeof(int)));
         CUDA_CALL(cudaMalloc((void **)&q_lengths_dev[g], MAX_QUERY_PER_GROUP * sizeof(uint32_t)));
+        CUDA_CALL(cudaMalloc((void **)&q_offset_dev[g], MAX_QUERY_PER_GROUP * sizeof(uint32_t)));
         CUDA_CALL(cudaMalloc((void **)&index_size_dev[g], qit_length * sizeof(uint8_t)));
         CUDA_CALL(cudaMalloc((void **)&threshold_dev[g], MAX_QUERY_PER_GROUP * sizeof(uint32_t)));
     }
     KeyValue *pHashTable[NUM_STREAM];
     Task *task_dev[NUM_STREAM];
     uint32_t *task_num_dev[NUM_STREAM];
+
     for (int s = 0; s < NUM_STREAM; s++)
     {
         // pHashTable[s] = create_hashtable(max_hashtable_capacity);
-        // pHashTable[s] = create_hashtable(max_hashtable_capacity,&streams[s]);
         CUDA_CALL(cudaMalloc((void **)&task_dev[s], MAX_FILTER_TASK * sizeof(Task)));
         CUDA_CALL(cudaMemset(task_dev[s], 0, MAX_FILTER_TASK * sizeof(Task)));
         CUDA_CALL(cudaMalloc((void **)&task_num_dev[s], sizeof(uint32_t)));
@@ -301,6 +438,13 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     SWTasks sw_tasks_total;
     vector<SWResult> res_s[q_groups.size()][NUM_STREAM];
 
+    char* query_dev;
+    CUDA_CALL(cudaMalloc((void **)&query_dev, total_len_query));
+    CUDA_CALL(cudaMemcpy(query_dev, query, total_len_query, cudaMemcpyHostToDevice));
+#ifdef USE_GPU_SW
+    sw_tasks_total.q = query;
+#endif
+
     gettimeofday(&t_end, NULL);
     time_prof.mem_time += timeuse(t_start, t_end);
 
@@ -321,6 +465,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             CUDA_CALL(cudaMemcpy(q_idx_dev[g_idx], q_groups[g].qit.q_idx, qit_length * qit_width * sizeof(int), cudaMemcpyHostToDevice));
             CUDA_CALL(cudaMemcpy(index_size_dev[g_idx], q_groups[g].qit.index_size, qit_length * sizeof(uint8_t), cudaMemcpyHostToDevice));
             CUDA_CALL(cudaMemcpy(q_lengths_dev[g_idx], q_groups[g].length, MAX_QUERY_PER_GROUP * sizeof(uint32_t), cudaMemcpyHostToDevice));
+            CUDA_CALL(cudaMemcpy(q_offset_dev[g_idx], q_groups[g].offset, MAX_QUERY_PER_GROUP * sizeof(uint32_t), cudaMemcpyHostToDevice));
             CUDA_CALL(cudaMemcpy(threshold_dev[g_idx], q_groups[g].min_diag_hit, MAX_QUERY_PER_GROUP * sizeof(uint32_t), cudaMemcpyHostToDevice));
             memcpy(kHashTableCapacity_host[g_idx], q_groups[g].hashtable_capacity, sizeof(uint32_t) * MAX_QUERY_PER_GROUP);
             memcpy(kHashTableOffset_host[g_idx], q_groups[g].hashtable_offset, sizeof(uint32_t) * MAX_QUERY_PER_GROUP);
@@ -333,6 +478,23 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         thread result_threads[n_groups][NUM_STREAM];
 
         cudaEvent_t seeding_finished[n_groups][NUM_STREAM];
+
+
+#ifdef USE_GUP_DIFFUSE
+
+        int direct_matrixSize = (MaxQueryLen+1) * (2*band_width + 1);
+        int threadsPerBlock = 64;  // 根据 shared memory 限制调整
+        int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
+        
+        int* rd[NUM_STREAM];   // direct_matrixSize * BatchSize * sizeof(int)
+        SWResult_d * res_d[NUM_STREAM], *res_h[NUM_STREAM];  // MaxAlignLen * BatchSize * sizeof(SWResult_d)
+        static int* BLOSUM62_d[NUM_STREAM];
+        for (int s = 0; s < NUM_STREAM; s++)
+        {
+            res_h[s] = (SWResult_d*) malloc(MaxAlignLen * BatchSize * sizeof(SWResult_d));
+        }
+    
+#endif
 
 #ifndef USE_GPU_SW
         vector<future<int>> rs[n_groups][NUM_STREAM];
@@ -349,6 +511,14 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         for (int s = 0; s < NUM_STREAM; s++)
         {
             CUDA_CALL(cudaStreamCreate(&streams[s]));
+#ifdef USE_GUP_DIFFUSE
+            CUDA_CALL(cudaMallocAsync((void**)&rd[s], direct_matrixSize * BatchSize * sizeof(int),streams[s]));
+            CUDA_CALL(cudaMemsetAsync(rd[s], 0,direct_matrixSize * BatchSize * sizeof(int),streams[s]));
+            CUDA_CALL(cudaMallocAsync((void**)&res_d[s], MaxAlignLen * BatchSize * sizeof(SWResult_d),streams[s]));
+            
+            CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int),streams[s]));
+            CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s], BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,streams[s]));
+#endif
             pHashTable[s] = create_hashtable_async(max_hashtable_capacity,streams[s]);
             // printf("start stream %d\n", s);
             size_t s_length_stream = s_length[s];
@@ -381,15 +551,113 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 CUDA_CALL(cudaMemcpyAsync(task_host[g_idx][s], task_dev[s], MAX_FILTER_TASK * sizeof(Task), cudaMemcpyDeviceToHost, streams[s]));
                 CUDA_CALL(cudaMemcpyAsync(task_num_host[g_idx][s], task_num_dev[s], sizeof(uint32_t), cudaMemcpyDeviceToHost, streams[s]));
                 CUDA_CALL(cudaEventRecord(seeding_finished[g_idx][s]));
-#ifdef USE_GPU_SW
-                result_threads[g_idx][s] = thread(handle_results, ref(seeding_finished[g_idx][s]), task_host[g_idx][s], task_num_host[g_idx][s], ref(q_groups[g]), s_length[s], s, ref(res_s[g][s]), ref(sw_tasks_total));
+// #ifdef USE_GPU_SW
+//                 result_threads[g_idx][s] = thread(handle_results, ref(seeding_finished[g_idx][s]), task_host[g_idx][s], task_num_host[g_idx][s], ref(q_groups[g]), s_length[s], s, ref(res_s[g][s]), ref(sw_tasks_total));
+#ifdef USE_GUP_DIFFUSE
+                // handle_results( streams[s],ref(seeding_finished[g_idx][s]), query, query_dev ,subj[s],(subj_dev + s_begin), task_host[g_idx][s], task_num_host[g_idx][s], ref(q_groups[g]), s_length[s], ref(res_s[g][s]), ref(sw_tasks[g][s]));
+                // const int MAX_BATCHES =100;
+                // cudaEvent_t sw_finished[NUM_STREAM][MAX_BATCHES];
+                // for (int es = 0; es < NUM_STREAM; ++es) {
+                //     for (int ei = 0; ei < MAX_BATCHES; ++ei) {
+                //         CUDA_CALL(cudaEventCreate(&sw_finished[es][ei]));
+                //     }
+                // }
+                // CUDA_CALL(cudaStreamSynchronize(streams[s]));
+
+
+                cudaEventSynchronize(seeding_finished[g_idx][s]);
+                size_t cpu_start = 0, n = *task_num_host[g_idx][s];
+                printf("@@ g=%d, s=%d %d\n",g,s,n);
+                Task *t_begin = task_host[g_idx][s];
+                for (int i = 0; i < n; i++)
+                {
+                    Task &kv = *(t_begin + i);
+                    sw_tasks[g][s].q_idxs.resize(n);
+                    sw_tasks[g][s].q_lens.resize(n);
+                    sw_tasks[g][s].diags.resize(n);
+                    sw_tasks[g][s].q_idxs[i]=q_groups[g].offset[kv.q_id];
+                    sw_tasks[g][s].q_lens[i]=q_groups[g].length[kv.q_id];
+                    sw_tasks[g][s].diags[i]=kv.key;
+                }
+
+                res_s[g][s].resize(n);
+                printf("cuda kernel begin\n");
+                for(size_t it = 0; it < n; it += BatchSize){
+                    if(it+BatchSize >= n){
+                        cpu_start = it;
+                        break;
+                    }
+                    for(int i = 0; i < BatchSize; ++ i){
+
+                        size_t n = q_groups[g].length[task_host[g_idx][s][it + i].q_id];
+                        size_t q_idx  = q_groups[g].offset[task_host[g_idx][s][it + i].q_id];
+                        size_t diag  = task_host[g_idx][s][it + i].key;
+                        // TODO GPU上没有 offset
+                        assert(q_idx == sw_tasks[g][s].q_idxs[it+i]);
+                        
+                        // 对的
+                        assert(diag == sw_tasks[g][s].diags[it+i]);
+
+                        // 对的
+                        assert(n == sw_tasks[g][s].q_lens[it+i]);
+                    }
+
+
+                        
+                    banded_sw_kernel<<<blocks,threadsPerBlock,0,streams[s]>>>(
+                                    q_lengths_dev[g_idx], q_offset_dev[g_idx],task_dev[s]+it,
+                                    query_dev,subj_dev + s_begin,s_length[s],
+                                    rd[s],band_width,res_d[s],BLOSUM62_d[s]);
+                    CUDA_CALL(cudaMemcpyAsync(res_h[s], res_d[s], BatchSize * MaxAlignLen * sizeof(SWResult_d), cudaMemcpyDeviceToHost,streams[s]));
+                    CUDA_CALL(cudaStreamSynchronize(streams[s]));
+                    // CUDA_CALL(cudaEventRecord(sw_finished[s][it/BatchSize %MAX_BATCHES]));
+                    // CUDA_CALL(cudaEventSynchronize(sw_finished[s][it/BatchSize %MAX_BATCHES]));
+
+                    for (size_t i = 0; i < BatchSize; ++i) {
+                        int q_len = res_h[s][i * MaxAlignLen].qlen;
+                        int c_len = res_h[s][i * MaxAlignLen].clen;
+
+                        res_s[g][s][it + i].q_res.resize(q_len);
+                        res_s[g][s][it + i].s_res.resize(c_len);
+                        
+                        assert(res_s[g][s][it + i].q_res.size());
+                        assert(res_s[g][s][it + i].s_res.size());
+                        
+                        memcpy(res_s[g][s][it + i].q_res.data(),res_h[s][i * MaxAlignLen].q_res_d,sizeof(int) * res_h[s][i * MaxAlignLen].qlen);
+                        memcpy(res_s[g][s][it + i].s_res.data(),res_h[s][i * MaxAlignLen].s_res_d,sizeof(int) * res_h[s][i * MaxAlignLen].clen);
+                        reverse(res_s[g][s][it + i].q_res.begin(), res_s[g][s][it + i].q_res.end());
+                        reverse(res_s[g][s][it + i].s_res.begin(), res_s[g][s][it + i].s_res.end());
+                        SWResult sw_tmp;
+                        cpu_kernel(task_host[g_idx][s][it+i].q_id,&sw_tmp,query,subj[s],s_length[s],q_groups[g].offset,q_groups[g].length,task_host[g_idx][s][it+i].key,band_width);
+                        res_s[g][s][it + i].score = res_h[s][i * MaxAlignLen].score;
+                        assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
+                        assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );             
+                        assert(sw_tmp.score == res_s[g][s][it + i].score );             
+                    }
+                    printf("done : %ld\n", it);
+                }
+                printf("cuda kernel finished \n");
+                for(size_t it=cpu_start; it < n; it ++){
+                    
+                    cpu_kernel(task_host[g_idx][s][it].q_id,&res_s[g][s][it],query,subj[s],s_length[s],q_groups[g].offset,q_groups[g].length,task_host[g_idx][s][it].key,band_width);
+                    // generate_report(&res_s[g][s][it],query, subj[s]);
+                }
+                printf("kernel finished \n");
+                for(size_t it = 0; it < cpu_start; it ++){
+                    generate_report(&res_s[g][s][it],query, subj[s]);
+                    // printf("generate done : %ld\n", it);
+                }
+
+                    // banded_sw_kernel<<<blocks,threadsPerBlock,0,s>>>(q_lengths_dev[g_idx], q_idx_dev[g_idx],diags_d,query_dev,subj_dev,tasks.c_len,rd,band_width,res_d,BLOSUM62_d);
+        
 #else
                 result_threads[g_idx][s] = thread(handle_results, ref(seeding_finished[g_idx][s]), query, subj[s], task_host[g_idx][s], task_num_host[g_idx][s], ref(q_groups[g]), s_length[s], s, ref(res_s[g][s]), ref(sw_tasks[g][s]), pool, ref(rs[g_idx][s]));
 #endif 
             }
+            // CUDA_CALL(cudaStreamSynchronize(streams[s]));
+            destroy_hashtable_async(pHashTable[s],streams[s]);
             s_begin += s_length_stream_byte;
             cout << "=";
-            cudaFreeAsync(pHashTable[s],streams[s]);
         }
 
         CUDA_CALL(cudaDeviceSynchronize());
@@ -430,6 +698,12 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
         for (int s = 0; s < NUM_STREAM; s++)
         {
+            #ifdef USE_GUP_DIFFUSE
+                CUDA_CALL(cudaFreeAsync(rd[s], streams[s]));
+                CUDA_CALL(cudaFreeAsync(res_d[s], streams[s]));
+                CUDA_CALL(cudaFreeAsync(BLOSUM62_d[s], streams[s]));
+                CUDA_CALL(cudaStreamSynchronize(streams[s]));
+            #endif
             CUDA_CALL(cudaStreamDestroy(streams[s]));
         }
 
@@ -440,7 +714,9 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             for (int g = g_begin; g < g_begin + n_groups; g++)
             {
                 int g_idx = g - g_begin;
-                result_threads[g_idx][s].join();
+#ifndef USE_GUP_DIFFUSE
+                    result_threads[g_idx][s].join();
+#endif
                 CUDA_CALL(cudaEventDestroy(seeding_finished[g_idx][s]));
                 hsp_count += res_s[g][s].size();
                 cout << "=";
@@ -464,6 +740,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     gettimeofday(&t_start, NULL);
 
     n_groups = q_groups.size();
+
     if (n_groups > MAX_GROUPS_PER_ROUND)
         n_groups = MAX_GROUPS_PER_ROUND;
 
@@ -481,6 +758,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         CUDA_CALL(cudaFree(q_idx_dev[g]));
 
         CUDA_CALL(cudaFree(q_lengths_dev[g]));
+        CUDA_CALL(cudaFree(q_offset_dev[g]));
 
         CUDA_CALL(cudaFree(index_size_dev[g]));
 
@@ -491,17 +769,19 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     time_prof.mem_time += timeuse(t_start, t_end);
 
 #ifdef USE_GPU_SW
+
     gettimeofday(&t_start, NULL);
-    char* query_dev;
-    CUDA_CALL(cudaMalloc((void **)&query_dev, total_len_query));
-    CUDA_CALL(cudaMemcpy(query_dev, query, total_len_query, cudaMemcpyHostToDevice));
-    sw_tasks_total.q = query;
+    // char* query_dev;
+    // CUDA_CALL(cudaMalloc((void **)&query_dev, total_len_query));
+    // CUDA_CALL(cudaMemcpy(query_dev, query, total_len_query, cudaMemcpyHostToDevice));
+    // sw_tasks_total.q = query;
     for (int s = 0; s < NUM_STREAM; s++)
     {
         sw_tasks_total.c_all[s] = subj[s];
         sw_tasks_total.c_offs[s] = s==0? 0: sw_tasks_total.c_offs[s-1] +s_length[s-1];
     }
-    gasal_run(sw_tasks_total, res_s, query_dev, subj_dev, q_groups.size(), band_width);
+    kernel_run(ref(sw_tasks_total), query_dev, subj_dev, res_s, band_width);
+    // gasal_run(sw_tasks_total, res_s, query_dev, subj_dev, q_groups.size(), band_width);
     cout << "Done.\t[";
 
     gettimeofday(&t_end, NULL);

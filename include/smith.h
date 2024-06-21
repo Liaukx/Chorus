@@ -1,6 +1,7 @@
 #pragma once
 
 #include "util.h"
+#include <cuda_runtime.h>
 
 using namespace std;
 
@@ -12,6 +13,12 @@ using namespace std;
 #define LEFT 2
 #define DIAG 3
 
+
+#define MaxAlignLen 5000
+#define MaxQueryLen 50000
+#define TILE_SIZE 2
+#define MaxBW 11
+#define BatchSize 128
 // mutex mu1;
 
 typedef struct
@@ -20,12 +27,26 @@ typedef struct
     int y; // left
     int m; // left top
 } record;
-
+typedef struct
+{
+    int score;
+    int qlen;
+    int clen;
+    size_t q_res_d[MaxAlignLen];
+    size_t s_res_d[MaxAlignLen];
+} SWResult_d;
 inline char get_char(const char *s, size_t offset)
 {
     size_t n_bit = offset * 5;
     return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
 }
+__device__ inline char get_char_d(const char *s, size_t offset)
+{
+    size_t n_bit = offset * 5;
+    uint16_t* uint16_ptr = reinterpret_cast<uint16_t*>(const_cast<char*>(s));
+    return MASK5((unsigned)((*((uint16_t *)&(uint16_ptr[n_bit >> 4 ]))) >> (n_bit & 7)));
+}
+
 
 class record_matrix{
 public:
