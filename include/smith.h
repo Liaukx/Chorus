@@ -8,6 +8,10 @@ using namespace std;
 #define max2(m, n) ((m) > (n) ? (m) : (n))
 #define max3(m, n, p) ((m) > (n) ? ((m) > (p) ? (m) : (p)) : ((n) > (p) ? (n) : (p)))
 #define MASK5(v) (v & 0b11111)
+#define calIndex(i,j,w) ((i+1)*(w)+(j+1))
+#define calTop(i,j,w) ((i)*(w)+(j+2))
+#define calLeft(i,j,w) ((i+1)*(w)+(j))
+#define calDiag(i,j,w) ((i)*(w)+(j+1))
 #define END 0
 #define TOP 1
 #define LEFT 2
@@ -27,6 +31,7 @@ typedef struct
     int y; // left
     int m; // left top
 } record;
+
 typedef struct
 {
     int score;
@@ -35,11 +40,13 @@ typedef struct
     size_t q_res_d[MaxAlignLen];
     size_t s_res_d[MaxAlignLen];
 } SWResult_d;
+
 inline char get_char(const char *s, size_t offset)
 {
     size_t n_bit = offset * 5;
     return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
 }
+
 __device__ inline char get_char_d(const char *s, size_t offset)
 {
     size_t n_bit = offset * 5;
@@ -90,11 +97,27 @@ public:
     direct_matrix(int bw, size_t q_len):width(bw*2 + 1),height(q_len+1){
         data = (int*) malloc(sizeof(int) * width * height);
         memset(data,0,width * height * sizeof(int));
+        if (data == nullptr)
+        {
+            printf("CPU out of memory!\n");
+            exit(-1);
+            return;
+        }
     }
     
     direct_matrix(int num, int bw, size_t q_len):width(bw*2 + 1),height(q_len+1), thread_num(num){
         data = (int*) malloc(sizeof(int) * width * height * num);
         memset(data,0,width * height * num * sizeof(int));
+    }
+
+    void assign(size_t _q, size_t _c,int val){
+        data[_c+1 * height + _q+1] = val;
+    }
+    int get(size_t _q, size_t _c){
+        return data[_c+1 * height + _q+1];
+    }
+    ~direct_matrix(){
+        free(data);
     }
 
 private:
