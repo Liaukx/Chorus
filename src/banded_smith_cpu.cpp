@@ -98,7 +98,7 @@ void generate_report(SWResult *res, const char* q, const char* c){
     }
 }
 
-void cpu_kernel(const int idx, SWResult *res, 
+void cpu_kernel(SWResult *res, 
                 const char *q, const char* c, 
                 size_t c_len, uint32_t q_idx, uint32_t n,
                 uint32_t diag, const int band_width)

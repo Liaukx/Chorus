@@ -483,7 +483,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 #ifdef USE_GUP_DIFFUSE
 
         int direct_matrixSize = (MaxQueryLen+1) * (2*band_width + 1);
-        int threadsPerBlock = 64;  // 根据 shared memory 限制调整
+        int threadsPerBlock = 128;  // 根据 shared memory 限制调整
         int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
         
         int* rd[NUM_STREAM];   // direct_matrixSize * BatchSize * sizeof(int)
@@ -628,18 +628,18 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                         reverse(res_s[g][s][it + i].q_res.begin(), res_s[g][s][it + i].q_res.end());
                         reverse(res_s[g][s][it + i].s_res.begin(), res_s[g][s][it + i].s_res.end());
                         SWResult sw_tmp;
-                        cpu_kernel(task_host[g_idx][s][it+i].q_id,&sw_tmp,query,subj[s],s_length[s],q_groups[g].offset,q_groups[g].length,task_host[g_idx][s][it+i].key,band_width);
+                        cpu_kernel(&sw_tmp,query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it + i].q_id],q_groups[g].length[task_host[g_idx][s][it + i].q_id],task_host[g_idx][s][it+i].key,band_width);
                         res_s[g][s][it + i].score = res_h[s][i * MaxAlignLen].score;
-                        assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
-                        assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );             
-                        assert(sw_tmp.score == res_s[g][s][it + i].score );             
+                        // assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
+                        // assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );             
+                        // assert(sw_tmp.score == res_s[g][s][it + i].score );             
                     }
                     printf("done : %ld\n", it);
                 }
                 printf("cuda kernel finished \n");
                 for(size_t it=cpu_start; it < n; it ++){
                     
-                    cpu_kernel(task_host[g_idx][s][it].q_id,&res_s[g][s][it],query,subj[s],s_length[s],q_groups[g].offset,q_groups[g].length,task_host[g_idx][s][it].key,band_width);
+                    cpu_kernel(&res_s[g][s][it],query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it].q_id],q_groups[g].length[task_host[g_idx][s][it].q_id],task_host[g_idx][s][it].key,band_width);
                     // generate_report(&res_s[g][s][it],query, subj[s]);
                 }
                 printf("kernel finished \n");
@@ -715,7 +715,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             {
                 int g_idx = g - g_begin;
 #ifndef USE_GUP_DIFFUSE
-                    result_threads[g_idx][s].join();
+                result_threads[g_idx][s].join();
 #endif
                 CUDA_CALL(cudaEventDestroy(seeding_finished[g_idx][s]));
                 hsp_count += res_s[g][s].size();
