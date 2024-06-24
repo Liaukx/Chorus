@@ -1,5 +1,6 @@
 #include "blastp.h"
 #include <assert.h>
+#include <chrono>
 
 #define PACK_KEY(k) ((k & ~0x7) | 0x3)
 
@@ -149,6 +150,7 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     
     size_t n = q_lens[task[idx].q_id];
+    if(n > MaxQueryLen) printf("## Query Len %ld\n", n);
     assert( n < MaxQueryLen);
    
     size_t q_idx  = q_idxs[task[idx].q_id];
@@ -261,8 +263,8 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     }
 
     
-    (res+ idx*MaxAlignLen)->score = Score;
-    assert((res+ idx*MaxAlignLen)->score != 0);
+    (res+ idx)->score = Score;
+    assert((res+ idx)->score != 0);
 
     size_t cur_q= max_q;
     size_t cur_c = max_c;
@@ -278,8 +280,8 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
         int64_t res_q = (d&0x01) ? (cur_q + q_idx) : -1;
         int64_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : -1;
         
-        (res+ idx*MaxAlignLen)->q_res_d[cnt_q ++] = (res_q);
-        (res+ idx*MaxAlignLen)->s_res_d[cnt_c ++] = (res_c);
+        (res+ idx)->q_res_d[cnt_q ++] = (res_q);
+        (res+ idx)->s_res_d[cnt_c ++] = (res_c);
         //TOP 01b, left 10b, diag 11b
         //DIAG : cur_q -= 1
         //TOP : cur_q -= 1, cur_c += 1;
@@ -290,8 +292,8 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     }
     free(rt);
 
-    (res+ idx*MaxAlignLen)->qlen = cnt_q;
-    (res+ idx*MaxAlignLen)->clen = cnt_c;
+    (res+ idx)->qlen = cnt_q;
+    (res+ idx)->clen = cnt_c;
     assert(cnt_q && cnt_c);
 }
 
@@ -501,9 +503,10 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
 
 #ifdef USE_GUP_DIFFUSE
+        cudaEvent_t sw_kernel_finished[10000][NUM_STREAM];
 
         int direct_matrixSize = (MaxQueryLen+1) * (2*band_width + 1);
-        int threadsPerBlock = 128;  // 根据 shared memory 限制调整
+        int threadsPerBlock = 64;  // 根据 shared memory 限制调整
         int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
         
         int* rd[NUM_STREAM];   // direct_matrixSize * BatchSize * sizeof(int)
@@ -511,7 +514,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         static int* BLOSUM62_d[NUM_STREAM];
         for (int s = 0; s < NUM_STREAM; s++)
         {
-            res_h[s] = (SWResult_d*) malloc(MaxAlignLen * BatchSize * sizeof(SWResult_d));
+            res_h[s] = (SWResult_d*) malloc(BatchSize * sizeof(SWResult_d));
         }
     
 #endif
@@ -534,7 +537,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 #ifdef USE_GUP_DIFFUSE
             CUDA_CALL(cudaMallocAsync((void**)&rd[s], direct_matrixSize * BatchSize * sizeof(int),streams[s]));
             CUDA_CALL(cudaMemsetAsync(rd[s], 0,direct_matrixSize * BatchSize * sizeof(int),streams[s]));
-            CUDA_CALL(cudaMallocAsync((void**)&res_d[s], MaxAlignLen * BatchSize * sizeof(SWResult_d),streams[s]));
+            CUDA_CALL(cudaMallocAsync((void**)&res_d[s],BatchSize * sizeof(SWResult_d),streams[s]));
             
             CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int),streams[s]));
             CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s], BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,streams[s]));
@@ -589,67 +592,82 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 size_t cpu_start = 0, n = *task_num_host[g_idx][s];
                 printf("@@ g=%d, s=%d %d\n",g,s,n);
                 Task *t_begin = task_host[g_idx][s];
-                for (int i = 0; i < n; i++)
-                {
-                    Task &kv = *(t_begin + i);
-                    sw_tasks[g][s].q_idxs.resize(n);
-                    sw_tasks[g][s].q_lens.resize(n);
-                    sw_tasks[g][s].diags.resize(n);
-                    sw_tasks[g][s].q_idxs[i]=q_groups[g].offset[kv.q_id];
-                    sw_tasks[g][s].q_lens[i]=q_groups[g].length[kv.q_id];
-                    sw_tasks[g][s].diags[i]=kv.key;
-                }
-
+                
                 res_s[g][s].resize(n);
+                
+                // printf("CPU begin, process iters:%ld\n",n/2);
+                for(int it = 0; it < n; ++it) res_s[g][s][it].num_q = task_host[g_idx][s][it].q_id;
+               
+                // for (int i = 0; i < n/2; i++)
+                // {
+                //     Task &kv = *(t_begin + i);
+                //     sw_tasks[g][s].q_idxs.resize(n);
+                //     sw_tasks[g][s].q_lens.resize(n);
+                //     sw_tasks[g][s].diags.resize(n);
+                //     sw_tasks[g][s].q_idxs[i]=q_groups[g].offset[kv.q_id];
+                //     sw_tasks[g][s].q_lens[i]=q_groups[g].length[kv.q_id];
+                //     sw_tasks[g][s].diags[i]=kv.key;
+                // }
+                // TODO test CPU and GPU
+                // mu2.lock();
+                // for (int it = 0; it < n/2; ++it)
+                // {
+                //     rs.emplace_back(pool->enqueue([&, it]
+                //                                 {
+                //         smith_waterman_kernel(it,&res[g][s][it],&sw_task[g][s]);
+                //         return it; }));
+                // }
+                // mu2.unlock();
+                
                 printf("cuda kernel begin\n");
                 for(size_t it = 0; it < n; it += BatchSize){
                     if(it+BatchSize >= n){
                         cpu_start = it;
                         break;
                     }
-                    for(int i = 0; i < BatchSize; ++ i){
+                    // for(int i = 0; i < BatchSize; ++ i){
 
-                        size_t n = q_groups[g].length[task_host[g_idx][s][it + i].q_id];
-                        size_t q_idx  = q_groups[g].offset[task_host[g_idx][s][it + i].q_id];
-                        size_t diag  = task_host[g_idx][s][it + i].key;
-                        // TODO GPU上没有 offset
-                        assert(q_idx == sw_tasks[g][s].q_idxs[it+i]);
+                    //     size_t n = q_groups[g].length[task_host[g_idx][s][it + i].q_id];
+                    //     size_t q_idx  = q_groups[g].offset[task_host[g_idx][s][it + i].q_id];
+                    //     size_t diag  = task_host[g_idx][s][it + i].key;
+                    //     // TODO GPU上没有 offset
+                    //     assert(q_idx == sw_tasks[g][s].q_idxs[it+i]);
                         
-                        // 对的
-                        assert(diag == sw_tasks[g][s].diags[it+i]);
+                    //     // 对的
+                    //     assert(diag == sw_tasks[g][s].diags[it+i]);
 
-                        // 对的
-                        assert(n == sw_tasks[g][s].q_lens[it+i]);
-                    }
+                    //     // 对的
+                    //     assert(n == sw_tasks[g][s].q_lens[it+i]);
+                    // }
 
 
-                        
+                    // CUDA_CALL(cudaEventCreate(&sw_kernel_finished[it/BatchSize][s]));    
                     banded_sw_kernel<<<blocks,threadsPerBlock,0,streams[s]>>>(
                                     q_lengths_dev[g_idx], q_offset_dev[g_idx],task_dev[s]+it,
                                     query_dev,subj_dev + s_begin,s_length[s],
                                     rd[s],band_width,res_d[s],BLOSUM62_d[s]);
-                    CUDA_CALL(cudaMemcpyAsync(res_h[s], res_d[s], BatchSize * MaxAlignLen * sizeof(SWResult_d), cudaMemcpyDeviceToHost,streams[s]));
+                    CUDA_CALL(cudaMemcpyAsync(res_h[s], res_d[s], BatchSize * sizeof(SWResult_d), cudaMemcpyDeviceToHost,streams[s]));
                     CUDA_CALL(cudaStreamSynchronize(streams[s]));
+                    // CUDA_CALL(cudaEventRecord(sw_kernel_finished[it/BatchSize][s]));
                     // CUDA_CALL(cudaEventRecord(sw_finished[s][it/BatchSize %MAX_BATCHES]));
                     // CUDA_CALL(cudaEventSynchronize(sw_finished[s][it/BatchSize %MAX_BATCHES]));
-
+                    // cudaEventSynchronize(sw_kernel_finished[it/BatchSize][s]);
                     for (size_t i = 0; i < BatchSize; ++i) {
-                        int q_len = res_h[s][i * MaxAlignLen].qlen;
-                        int c_len = res_h[s][i * MaxAlignLen].clen;
+                        int q_len = res_h[s][i].qlen;
+                        int c_len = res_h[s][i].clen;
 
                         res_s[g][s][it + i].q_res.resize(q_len);
                         res_s[g][s][it + i].s_res.resize(c_len);
                         
-                        assert(res_s[g][s][it + i].q_res.size());
-                        assert(res_s[g][s][it + i].s_res.size());
+                        assert(c_len && q_len);
                         
-                        memcpy(res_s[g][s][it + i].q_res.data(),res_h[s][i * MaxAlignLen].q_res_d,sizeof(int) * res_h[s][i * MaxAlignLen].qlen);
-                        memcpy(res_s[g][s][it + i].s_res.data(),res_h[s][i * MaxAlignLen].s_res_d,sizeof(int) * res_h[s][i * MaxAlignLen].clen);
+                        memcpy(res_s[g][s][it + i].q_res.data(),res_h[s][i].q_res_d,sizeof(int) * res_h[s][i].qlen);
+                        memcpy(res_s[g][s][it + i].s_res.data(),res_h[s][i].s_res_d,sizeof(int) * res_h[s][i].clen);
                         reverse(res_s[g][s][it + i].q_res.begin(), res_s[g][s][it + i].q_res.end());
                         reverse(res_s[g][s][it + i].s_res.begin(), res_s[g][s][it + i].s_res.end());
                         SWResult sw_tmp;
                         cpu_kernel(&sw_tmp,query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it + i].q_id],q_groups[g].length[task_host[g_idx][s][it + i].q_id],task_host[g_idx][s][it+i].key,band_width);
-                        res_s[g][s][it + i].score = res_h[s][i * MaxAlignLen].score;
+                        res_s[g][s][it + i].score = res_h[s][i].score;
                         // TODO cannot check
                         // assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
                         // assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );             
