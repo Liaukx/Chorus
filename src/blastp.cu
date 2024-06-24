@@ -159,18 +159,25 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     size_t c_len_cur = c_end - (c_begin < 0 ? 0:c_begin);
 
     
-    __shared__ int shared_BLOSUM62[26 * 26];
+    // __shared__ int shared_BLOSUM62[26 * 26];
     
-    if (threadIdx.x == 0) {
-        for (int i = 0; i < 26 * 26; ++i) {
-            shared_BLOSUM62[i] = BLOSUM62[i];
-        }
+    // if (threadIdx.x == 0) {
+    //     for (int i = 0; i < 26 * 26; ++i) {
+    //         shared_BLOSUM62[i] = BLOSUM62[i];
+    //     }
 
-    }
-    __syncthreads(); // Wait for the copy to compl .ete
+    // }
+    // __syncthreads(); // Wait for the copy to compl .ete
+
+
     size_t width = 2 * band_width + 1;
     size_t height = n + 1;
 
+    for(size_t i = 0; i < width; ++ i){
+        for(size_t j = 0; j < height; ++ j){
+            rd[BatchSize * (i * height + j) + idx] = 0;
+        }
+    }
     
     size_t t_height = TILE_SIZE + 1;
     
@@ -181,7 +188,7 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     // memset(p, 0, width * height * sizeof(char));
     memset(rt, 0, width * t_height * sizeof(record));
     int direct_matrixSize = (MaxQueryLen+1) * (2*band_width + 1);
-    memset((rd + idx*direct_matrixSize), 0, direct_matrixSize * sizeof(int));
+    // memset((rd + idx*direct_matrixSize), 0, direct_matrixSize * sizeof(int));
 
     size_t max_q = 0;
     size_t max_c = 0;
@@ -191,45 +198,53 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
         
         size_t q_offset = it * TILE_SIZE;
 
-        for(size_t _q = 1; _q < t_height && q_offset + _q < height; ++_q){
-            for(size_t _c = 1; _c < width-1; ++_c){
+        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < height-1; ++_q){
+            for(size_t _c = 0; _c < width-2; ++_c){
                 
-                if(c_begin + _c-1+ q_offset + _q-1 < 0) continue;
-                if(c_begin + _c-1+ q_offset + _q-1 >= c_len) break;
+                if(c_begin + _c+ q_offset + _q < 0) continue;
+                if(c_begin + _c+ q_offset + _q >= c_len) break;
 
-                char chq = q[q_idx + q_offset + _q-1];
-                char chc = get_char_d(c, c_begin + q_offset + _c-1 + _q-1);
+                char chq = q[q_idx + q_offset + _q];
+                char chc = get_char_d(c, c_begin + q_offset + _c + _q);
                 
                 if (chq == END_SIGNAL || chc == END_SIGNAL)
                 {
                     continue;
                 }
 
-                rt[_q * width + _c].x = max3(rt[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  rt[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
-                rt[_q * width + _c].y = max3(rt[_q * width + (_c - 1)].y + SCORE_GAP_EXT, rt[_q * width + (_c - 1)].m + SCORE_GAP, 0);
+                rt[calIndex(_q,_c,width)].x = max3(rt[calTop(_q,_c,width)].x + SCORE_GAP_EXT,  rt[calTop(_q,_c,width)].m + SCORE_GAP, 0);
+                rt[calIndex(_q,_c,width)].y = max3(rt[calLeft(_q,_c,width)].y + SCORE_GAP_EXT, rt[calLeft(_q,_c,width)].m + SCORE_GAP, 0);
 
                 if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
                 {
                     // illegal word
-                    rt[_q * width + _c].m = 0;
+                    rt[calIndex(_q,_c,width)].m = 0;
                 }
                 else
                 {
-                    rt[_q * width + _c].m = max2(max3(rt[(_q - 1) * width + _c].x, rt[(_q - 1) * width + _c].y, rt[(_q - 1) * width + _c].m) + shared_BLOSUM62[chq * 26 + chc], 0);
+                    rt[calIndex(_q,_c,width)].m = max2(max3(rt[calDiag(_q,_c,width)].x, rt[calDiag(_q,_c,width)].y, rt[calDiag(_q,_c,width)].m) + BLOSUM62[chq * 26 + chc], 0);
                 }
 
-                score = max3(rt[_q * width + _c].x, rt[_q * width + _c].y, rt[_q * width + _c].m);
+                score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
+                
                 // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
                 // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == rt[_q * width + _c].x)*TOP + (score == rt[_q * width + _c].y)*LEFT + (rt[_c * height + _q + q_offset].m)*DIAG; 
-                if (score != 0)
-                {
-                    if (score == rt[_q * width + _c].x)
-                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = TOP;
-                    if (score == rt[_q * width + _c].y)
-                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = LEFT;
-                    if (score == rt[_q * width + _c].m)
-                        (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = DIAG;
-                }
+                rd[calIndex(_c, _q+q_offset,height) *BatchSize + idx] = \
+                    (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                    ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                
+                // if (score != 0)
+                // {
+                //     if (score == rt[_q * width + _c].x)
+                //         rd[(_c * height + _q + q_offset )*BatchSize + idx] = TOP;
+                //         // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = TOP;
+                //     if (score == rt[_q * width + _c].y)
+                //         rd[(_c * height + _q + q_offset )*BatchSize + idx] = LEFT;
+                //         // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = LEFT;
+                //     if (score == rt[_q * width + _c].m)
+                //         rd[(_c * height + _q + q_offset )*BatchSize + idx] = DIAG;
+                //         // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = DIAG;
+                // }
                 if (Score < score)
                 {
                     Score = score;
@@ -252,12 +267,16 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
     size_t cur_q= max_q;
     size_t cur_c = max_c;
     int cnt_q = 0, cnt_c = 0;
-    assert(rd + idx*direct_matrixSize +cur_c * height + cur_q< rd + BatchSize*direct_matrixSize);
-    while ((rd + idx*direct_matrixSize)[cur_c * height + cur_q])
+    assert(rd + BatchSize * calIndex(cur_c,cur_q,height) + idx < rd + BatchSize*direct_matrixSize);
+    // assert(rd + idx*direct_matrixSize +cur_c * height + cur_q< rd + BatchSize*direct_matrixSize);
+    assert(rd[BatchSize * calIndex(cur_c,cur_q,height) + idx]);
+    while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx])
+    // while ((rd + idx*direct_matrixSize)[cur_c * height + cur_q])
     {
-        int d = (rd + idx*direct_matrixSize)[cur_c * height + cur_q];
-        int64_t res_q = (d&0x01) ? ((cur_q-1) + q_idx) : -1;
-        int64_t res_c = (d&0x02) ? (c_begin + cur_c-1 + cur_q-1) : -1;
+        // int d = (rd + idx*direct_matrixSize)[cur_c * height + cur_q];
+        int d = rd[BatchSize * calIndex(cur_c,cur_q,height) + idx];
+        int64_t res_q = (d&0x01) ? (cur_q + q_idx) : -1;
+        int64_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : -1;
         
         (res+ idx*MaxAlignLen)->q_res_d[cnt_q ++] = (res_q);
         (res+ idx*MaxAlignLen)->s_res_d[cnt_c ++] = (res_c);
@@ -273,6 +292,7 @@ __global__ void banded_sw_kernel(uint32_t* q_lens, uint32_t* q_idxs,
 
     (res+ idx*MaxAlignLen)->qlen = cnt_q;
     (res+ idx*MaxAlignLen)->clen = cnt_c;
+    assert(cnt_q && cnt_c);
 }
 
 

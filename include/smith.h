@@ -21,10 +21,10 @@ using namespace std;
 
 
 #define MaxAlignLen 500
-#define MaxQueryLen 10000
+#define MaxQueryLen 15000
 #define TILE_SIZE 2
 #define MaxBW 11
-#define BatchSize 4096
+#define BatchSize 512
 // mutex mu1;
 
 typedef struct
