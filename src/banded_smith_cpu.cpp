@@ -97,13 +97,14 @@ void generate_report(SWResult *res, const char* q, const char* c){
         res->match = match;
     }
 }
-
+// CPU做一个分Batch的
 void cpu_kernel(SWResult *res, 
                 const char *q, const char* c, 
                 size_t c_len, uint32_t q_idx, uint32_t n,
+                // TODO pack 
                 uint32_t diag, const int band_width)
 {
-
+    //TODO 把banded 放到scoreMatrix的接口里，sw里面不体现
     int64_t c_begin = (int64_t)diag - band_width - n + 2;
     size_t c_end = diag + band_width;
     if (has_must_include)
@@ -142,6 +143,8 @@ void cpu_kernel(SWResult *res,
     size_t max_q = 0;
     size_t max_c = 0;
     int score = 0, Score = 0;
+    // TODO index映射到tile里的index
+    // TODO 行列的tile?
     // cal maxScore and it's position
     for(size_t it = 0; it * tileSize < n; it ++){
         
@@ -204,7 +207,7 @@ void cpu_kernel(SWResult *res,
 
     size_t cur_q = max_q;
     size_t cur_c = max_c;
-    
+
     while (rd[calIndex(cur_c,cur_q,height)])
     {
         int d = rd[calIndex(cur_c,cur_q,height)];
@@ -222,8 +225,54 @@ void cpu_kernel(SWResult *res,
         (cur_c) -= (d == LEFT);
     }
 
+    
+    // string Cigar = "";
+    // vector<int> cigar_len;
+    // cur_q = max_q;
+    // cur_c = max_c;
+    // while (rd[calIndex(cur_c,cur_q,height)])
+    // {
+    //     int d = rd[calIndex(cur_c,cur_q,height)];
+    //     int cur_cigar_cnt = 0;
+    //     while (rd[calIndex(cur_c,cur_q,height)] && rd[calIndex(cur_c,cur_q,height)]==d){
+    //         cur_cigar_cnt ++;
+    //         //TOP 01b, left 10b, diag 11b
+    //         //DIAG : cur_q -= 1
+    //         //TOP : cur_q -= 1, cur_c += 1;
+    //         //LEFT : cur_c -= 1
+    //         cur_q -= (d == DIAG || d == TOP);
+    //         cur_c += (d == TOP); // Increment cur_c if TOP (01b)
+    //         cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+    //     }
+    //     cigar_len.push_back(cur_cigar_cnt);
+    //     Cigar += ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+    // }
+    
+    // cur_q = max_q + q_idx;
+    // cur_c = c_begin + max_c + max_q;
+    // vector<int>q_res, s_res;
+    // for(int i = 0; i < cigar_len.size(); i ++){
+    //     int cur = cigar_len[i];
+    //     char op = Cigar[i];
+    //     int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT)); 
+    //     for(int j = 0; j < cur; ++ j){
+    //         q_res.push_back(cur_q);
+    //         s_res.push_back(cur_c);
+
+    //         //TOP 01b, left 10b, diag 11b
+    //         //DIAG : cur_q -= 1, cur_c -= 1
+    //         //TOP : cur_q -= 1, 
+    //         //LEFT : cur_c -= 1
+    //         cur_q -= (d == DIAG || d == TOP);
+    //         cur_c -= (d == LEFT || d == DIAG); // Decrement cur_c if LEFT (10b)
+    //     }
+    
+    // }
+
     free(rd);
     free(rt);
+    // assert(q_res.size() == res->q_res.size());
+    // assert(s_res.size() == res->s_res.size());
 
     reverse(res->q_res.begin(), res->q_res.end());
     reverse(res->s_res.begin(), res->s_res.end());
@@ -374,8 +423,8 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
     size_t diag = sw_task->diags[idx]; //  pos of c at end of q
     int64_t c_begin = (int64_t)diag - band_width - n + 2;
     size_t c_end = diag + band_width;
-    // cpu_kernel(res,q,c,c_len,q_idx,n,diag,band_width);
-    cpu_kernel(res,q,c,c_len,c_begin,c_end,q_idx,n,band_width);
+    cpu_kernel(res,q,c,c_len,q_idx,n,diag,band_width);
+    // cpu_kernel(res,q,c,c_len,c_begin,c_end,q_idx,n,band_width);
 
 }
 
