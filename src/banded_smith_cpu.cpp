@@ -256,8 +256,11 @@ void cpu_kernel(SWResult *res,
     //     char op = Cigar[i];
     //     int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT)); 
     //     for(int j = 0; j < cur; ++ j){
-    //         q_res.push_back(cur_q);
-    //         s_res.push_back(cur_c);
+    //         int tmp_q = (d&0x01) ? (cur_q) : -1;
+    //         int tmp_c = (d&0x02) ? (cur_c) : -1;
+        
+    //         q_res.push_back(tmp_q);
+    //         s_res.push_back(tmp_c);
 
     //         //TOP 01b, left 10b, diag 11b
     //         //DIAG : cur_q -= 1, cur_c -= 1
@@ -273,6 +276,19 @@ void cpu_kernel(SWResult *res,
     free(rt);
     // assert(q_res.size() == res->q_res.size());
     // assert(s_res.size() == res->s_res.size());
+    
+    // for(int i = 0; i < q_res.size(); ++ i){
+    //     if(!(q_res[i] == res->q_res[i])){
+    //         printf("## error %d\n", i);
+    //     }
+    // }
+    // for(int i = 0; i < s_res.size(); ++ i){
+    //     if(!(s_res[i] == res->s_res[i])){
+    //         printf("## error %d\n", i);
+    //     }
+    // }
+    // assert(s_res[i] == res->s_res[i]);
+    // assert(q_res[i] == res->q_res[i]);
 
     reverse(res->q_res.begin(), res->q_res.end());
     reverse(res->s_res.begin(), res->s_res.end());

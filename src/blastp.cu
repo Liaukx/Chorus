@@ -320,12 +320,11 @@ void cigar_to_index(int cigar_len, char* cigar_op, int* cigar_cnt,
         
 
         for(int j = 0; j < cur; ++ j){
-            if(cur_q < 0 || cur_c < 0){
-                printf("Negtive\n");
-            }
-            assert(cur_q >= 0 && cur_c >= 0);
-            q_res.push_back(cur_q);
-            s_res.push_back(cur_c);
+
+            int tmp_q = (d&0x01) ? (cur_q) : -1;
+            int tmp_c = (d&0x02) ? (cur_c) : -1;
+            q_res.push_back(tmp_q);
+            s_res.push_back(tmp_c);
 
             //TOP 01b, left 10b, diag 11b
             //DIAG : cur_q -= 1, cur_c -= 1
@@ -338,9 +337,6 @@ void cigar_to_index(int cigar_len, char* cigar_op, int* cigar_cnt,
     }
     reverse(q_res.begin(),q_res.end());
     reverse(s_res.begin(),s_res.end());
-    if(!q_res.size() || !s_res.size()){
-        printf("## %d\n",cigar_len);
-    }
     assert(q_res.size() && s_res.size());
 }
 
