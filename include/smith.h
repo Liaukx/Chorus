@@ -10,6 +10,7 @@ using namespace std;
 #define MASK5(v) (v & 0b11111)
 
 #define calIndex(i,j,w) ((i+1)*(w)+(j+1))
+#define calIndex3D(i,j,k,X,Y,Z) ((i+1)*(Y)*(Z)+(j+1)*(Z) + (k))
 #define calTop(i,j,w) ((i)*(w)+(j+2))
 #define calLeft(i,j,w) ((i+1)*(w)+(j))
 #define calDiag(i,j,w) ((i)*(w)+(j+1))
@@ -20,11 +21,11 @@ using namespace std;
 #define DIAG 3
 
 
-#define MaxAlignLen 200
-#define MaxQueryLen 15000
+#define MaxAlignLen 700
+#define MaxQueryLen 20000
 #define TILE_SIZE 2
-#define MaxBW 11
-#define BatchSize 2048
+#define MaxBW 25
+#define BatchSize 4096
 // mutex mu1;
 
 typedef struct
@@ -43,17 +44,10 @@ typedef struct
     size_t s_res_d[MaxAlignLen];
 } SWResult_d;
 
-inline char get_char(const char *s, size_t offset)
-{
-    size_t n_bit = offset * 5;
-    return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
-}
-
-__device__ inline char get_char_d(const char *s, size_t offset)
-{
-    size_t n_bit = offset * 5;
-    uint16_t* uint16_ptr = reinterpret_cast<uint16_t*>(const_cast<char*>(s));
-    return MASK5((unsigned)((*((uint16_t *)&(uint16_ptr[n_bit >> 4 ]))) >> (n_bit & 7)));
+__device__ inline char get_char_d(const char *s, size_t offset) {
+    offset *= 5;
+    const unsigned char *p = (const unsigned char *)(s + (offset >> 3));
+    return MASK5((unsigned)(((uint16_t)p[0] | ((uint16_t)p[1] << 8)) >> (offset & 7)));
 }
 
 
