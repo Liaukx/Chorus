@@ -183,10 +183,11 @@ void cpu_kernel(SWResult *res,
 
                 score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
                 
-                rd[calIndex(_c, _q+q_offset, height)] = \
-                    (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
-                    ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
-                
+                if(score)
+                    rd[calIndex(_c, _q+q_offset, height)] = \
+                        (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                        ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                    
                 if (Score < score)
                 {
                     Score = score;
@@ -379,9 +380,10 @@ void cpu_kernel(SWResult *res,
 
                 score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
                 
-                rd[calIndex(_c, _q+q_offset, height)] = \
-                    (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
-                    ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                if(score)
+                    rd[calIndex(_c, _q+q_offset, height)] = \
+                        (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                        ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
                 
                 if (Score < score)
                 {

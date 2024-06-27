@@ -289,7 +289,9 @@ void proceed_result(vector<SWResult> *res_d, vector<SWResult> &res_t, const char
 
                 string sn(s_name + res_t[t].sn_offset, res_t[t].sn_len);
                 res_t[t].s_name = sn;
-
+                // TODO in single stream it is right
+                // check s_res[0] and q_res[0] 
+                // then check s_offsets[num_s] and q_group.offset[num_q];
                 res_t[t].begin_s = res_t[t].s_res[0] - s_offsets[num_s];
                 res_t[t].begin_q = res_t[t].q_res[0] - q_group.offset[num_q];
 
