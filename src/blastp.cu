@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <chrono>
 #include <algorithm> 
+#include <nvtx3/nvToolsExt.h>
 
 #define PACK_KEY(k) ((k & ~0x7) | 0x3)
 
@@ -581,7 +582,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         // cout << "Prepare mem and data Time: " << timeuse(t_start, t_end) << endl;
 
         gettimeofday(&t_start, NULL);
-
+        nvtxRangePush("MyProfileRegion");
         for (int s = 0; s < NUM_STREAM; s++)
         {
             CUDA_CALL(cudaStreamCreate(&streams[s]));
@@ -648,8 +649,6 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 
                 res_s[g][s].resize(n);
                 
-                for(int it = 0; it < n; ++it) res_s[g][s][it].num_q = task_host[g_idx][s][it].q_id;
-                
                 // printf("cuda kernel begin\n");
                 for(size_t it = 0; it < n; it += BatchSize){
                     if(it+BatchSize >= n){
@@ -696,39 +695,20 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                                         q_end_h[s][i],s_end_h[s][i],
                                         res_s[g][s][it + i].q_res,res_s[g][s][it + i].s_res);
                         
-                        res_s[g][s][it + i].score = score_h[s][i];
-                        
-                        // check
-                        // SWResult sw_tmp;
-                        // cpu_kernel(&sw_tmp,query,subj[s],s_length[s],\
-                        //             q_groups[g].offset[task_host[g_idx][s][it + i].q_id],\
-                        //             q_groups[g].length[task_host[g_idx][s][it + i].q_id],\
-                        //             task_host[g_idx][s][it+i].key,band_width);
-                        // assert(sw_tmp.q_res.size() == res_s[g][s][it + i].q_res.size() );             
-                        // assert(sw_tmp.s_res.size() == res_s[g][s][it + i].s_res.size() );
-                        // for(int cnt = 0; cnt < sw_tmp.q_res.size(); ++ cnt){
-                        //     if(!(sw_tmp.q_res[cnt] == res_s[g][s][it + i].q_res[cnt])){
-                        //         printf("## error %d\n", cnt);
-                        //     }
-                        //     assert(sw_tmp.q_res[cnt] == res_s[g][s][it + i].q_res[cnt]);
-                        // }
-                        // for(int cnt = 0; cnt < sw_tmp.s_res.size(); ++ cnt){
-                        //     if(!(sw_tmp.s_res[cnt] == res_s[g][s][it + i].s_res[cnt])){
-                        //         printf("## error %d\n", cnt);
-                        //     }
-                        //     assert(sw_tmp.s_res[cnt] == res_s[g][s][it + i].s_res[cnt]);
-                        // }            
-                        // assert(sw_tmp.score == res_s[g][s][it + i].score );             
+                        res_s[g][s][it + i].score = score_h[s][i];             
                     }
-                    // printf("done : %ld\n", it);
                 }
                 // printf("cuda kernel finished \n");
+#pragma omp parallel
                 for(size_t it=cpu_start; it < n; it ++){   
                     cpu_kernel(&res_s[g][s][it],query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][it].q_id],q_groups[g].length[task_host[g_idx][s][it].q_id],task_host[g_idx][s][it].key,band_width);
+                    res_s[g][s][it].num_q = task_host[g_idx][s][it].q_id;
                     generate_report(&res_s[g][s][it],query, subj[s]);
                 }
                 // printf("kernel finished \n");
+#pragma omp parallel
                 for(size_t it = 0; it < cpu_start; it ++){
+                    res_s[g][s][it].num_q = task_host[g_idx][s][it].q_id;
                     generate_report(&res_s[g][s][it],query, subj[s]);
                     // printf("generate done : %ld\n", it);
                 }
@@ -745,7 +725,6 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             CUDA_CALL(cudaFreeAsync(rd[s], streams[s]));
             CUDA_CALL(cudaFreeAsync(rt[s], streams[s]));
             CUDA_CALL(cudaFreeAsync(BLOSUM62_d[s], streams[s]));
-            CUDA_CALL(cudaStreamSynchronize(streams[s]));
             CUDA_CALL(cudaFreeAsync(score_d[s], streams[s]));
             CUDA_CALL(cudaFreeAsync(s_end_d[s], streams[s]));
             CUDA_CALL(cudaFreeAsync(q_end_d[s], streams[s]));
@@ -756,7 +735,8 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             s_begin += s_length_stream_byte;
             cout << "=";
         }
-
+        
+        nvtxRangePop();
         CUDA_CALL(cudaDeviceSynchronize());
 
         gettimeofday(&t_end, NULL);
@@ -795,7 +775,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
         for (int s = 0; s < NUM_STREAM; s++)
         {
-            #ifdef USE_GUP_DIFFUSE
+#ifdef USE_GUP_DIFFUSE
                 // CUDA_CALL(cudaFreeAsync(rd[s], streams[s]));
                 // CUDA_CALL(cudaFreeAsync(rt[s], streams[s]));
                 // CUDA_CALL(cudaFreeAsync(BLOSUM62_d[s], streams[s]));
@@ -811,15 +791,15 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 //     CUDA_CALL(cudaFreeAsync(cigar_len_d[s], streams[s]));
 
                     
-                    free(score_h[s]);
-                    
-                    free(s_end_h[s]);
-                    free(q_end_h[s]);
-                    free(cigar_op_h[s]);
-                    free(cigar_cnt_h[s]);
-                    free(cigar_len_h[s]);
+                free(score_h[s]);
+                
+                free(s_end_h[s]);
+                free(q_end_h[s]);
+                free(cigar_op_h[s]);
+                free(cigar_cnt_h[s]);
+                free(cigar_len_h[s]);
                 // }
-            #endif
+#endif
             CUDA_CALL(cudaStreamDestroy(streams[s]));
         }
 
