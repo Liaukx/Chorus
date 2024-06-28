@@ -26,6 +26,7 @@ using namespace std;
 #define TILE_SIZE 2
 #define MaxBW 25
 #define BatchSize 4096
+#define MaxNumBatch 100
 // mutex mu1;
 
 typedef struct
