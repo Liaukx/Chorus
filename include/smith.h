@@ -21,7 +21,7 @@ using namespace std;
 #define DIAG 3
 
 
-#define MaxAlignLen 700
+#define MaxAlignLen 1000
 #define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
