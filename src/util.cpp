@@ -275,6 +275,8 @@ void proceed_result(vector<SWResult> *res_d, vector<SWResult> &res_t, const char
             // }
             // cout << "s_begin" << t<<":"<<endl;
             // cout <<res_t[t].s_res[0]<<endl;
+            // printf("@@ %d\n",res_t[t].s_res.size());
+            assert(res_t[t].s_res.size());
             int num_s = get_pos(res_t[t].s_res[0], s_offsets, n_subj);
             int num_q = res_t[t].num_q;
             res_t[t].num_q = q_group.id[num_q];

@@ -4,9 +4,9 @@ set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda)
 project(BLASTP LANGUAGES CXX C CUDA)
 
 SET(CMAKE_BUILD_TYPE "Debug")
-option(USE_GUP_DIFFUSE "Use GPU Smith-waterman" ON)
-if(USE_GUP_DIFFUSE)
-    add_definitions(-DUSE_GUP_DIFFUSE)
+option(USE_GPU_DIFFUSE "Use GPU Smith-waterman" ON)
+if(USE_GPU_DIFFUSE)
+    add_definitions(-DUSE_GPU_DIFFUSE)
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pthread")
