@@ -2,6 +2,41 @@
 // #include <libunwind.h>
 // #include <gperftools/tcmalloc.h>
 
+void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s)
+{
+    assert(cigar_len[idx]);
+    size_t cur_q = q_start[idx];
+    size_t cur_c = c_start[idx];
+    for(int i = 0; i < cigar_len[idx]; i ++){
+        int cur = (cigar_cnt + idx * MaxAlignLen)[i];
+        char op = (cigar_op + idx * MaxAlignLen)[i];
+        int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT));
+        
+
+        for(int j = 0; j < cur; ++ j){
+
+            int tmp_q = (d&0x01) ? (cur_q) : -1;
+            int tmp_c = (d&0x02) ? (cur_c) : -1;
+            res_s[idx].q_res.push_back(tmp_q);
+            res_s[idx].s_res.push_back(tmp_c);
+
+            //TOP 01b, left 10b, diag 11b
+            //DIAG : cur_q -= 1, cur_c -= 1
+            //TOP : cur_q -= 1, 
+            //LEFT : cur_c -= 1
+            cur_q -= (d == DIAG || d == TOP);
+            cur_c -= (d == LEFT || d == DIAG); // Decrement cur_c if LEFT (10b)
+        }
+    
+    }
+    reverse(res_s[idx].q_res.begin(),res_s[idx].q_res.end());
+    reverse(res_s[idx].s_res.begin(),res_s[idx].s_res.end());
+    assert(res_s[idx].q_res.size() && res_s[idx].s_res.size());
+}
+
 void generate_report(SWResult *res, const char* q, const char* c){
     size_t len = res->s_res.size();
     res->align_length = len;
@@ -95,6 +130,105 @@ void generate_report(SWResult *res, const char* q, const char* c){
         res->s = s;
         res->s_ori = s_ori;
         res->match = match;
+    }
+}
+
+
+void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c){
+    res_s[idx].score = score[idx];
+    res_s[idx].num_q = task[idx].q_id;
+    size_t len = res_s[idx].s_res.size();
+    res_s[idx].align_length = len;
+    res_s[idx].bitscore = (E_lambda * res_s[idx].score - log(E_k)) / (0.69314718055995);
+    char s[len + 1] = {0};
+    char q_seq[len + 1] = {0};
+    char s_ori[len + 1] = {0};
+    char match[len + 1] = {0};
+    int s_ori_len = 0;
+    res_s[idx].gap_open = 0;
+    res_s[idx].gaps = 0;
+    bool ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<c_res[t][i]<<" ";
+        if (res_s[idx].s_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            // printf("res_s[idx].s_res[i] = %d\n",res_s[idx].s_res[i]);
+            s[i] = get_char(c, res_s[idx].s_res[i]) + 65;
+            if (s[i] == 95)
+                s[i] = '*';
+            s_ori[s_ori_len++] = s[i];
+        }
+        else
+        {
+            s[i] = '-';
+            res_s[idx].gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res_s[idx].gap_open++;
+            }
+        }
+    }
+
+    if (has_must_include)
+    {
+        string s_ori_str(s_ori, len);
+        if (!check_include(s_ori_str))
+        {
+            res_s[idx].report = false;
+            return;
+        }
+    }
+    ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<q_res[t][i]<<" ";
+        if (res_s[idx].q_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            q_seq[i] = q[res_s[idx].q_res[i]] + 65;
+        }
+        else
+        {
+            q_seq[i] = '-';
+            res_s[idx].gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res_s[idx].gap_open++;
+            }
+        }
+    }
+    res_s[idx].mismatch = 0;
+    res_s[idx].positive = 0;
+    for (int i = 0; i < len; i++)
+    {
+        match[i]=' ';
+        if (BLOSUM62[(q_seq[i] - 65) * 26 + (s[i] - 65)] > 0 && q_seq[i]!='-' && s[i]!='-')
+        {
+            res_s[idx].positive++;
+            match[i]='+';
+        }
+        if (q_seq[i] != s[i])
+        {
+            res_s[idx].mismatch++;
+        }
+        else
+        {
+            match[i]=q_seq[i];
+        }
+            
+    }
+    res_s[idx].n_identity = res_s[idx].align_length - res_s[idx].mismatch;
+    res_s[idx].p_identity = (1 - (double)res_s[idx].mismatch / res_s[idx].align_length) * 100;
+    if (detailed_alignment)
+    {
+        res_s[idx].q = q_seq;
+        res_s[idx].s = s;
+        res_s[idx].s_ori = s_ori;
+        res_s[idx].match = match;
     }
 }
 // CPU做一个分Batch的
@@ -481,3 +615,17 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
 // mu1.unlock();
 // }
+
+
+void cigar_to_index_and_report(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s,
+            //    uint32_t* num_task,
+               int* score, Task* task, const char* query, const char* target)
+{
+    // res_s.resize(*num_task);
+    cigar_to_index(idx, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
+    generate_report(idx, res_s, score, task, query, target);
+    assert(res_s.size());
+}

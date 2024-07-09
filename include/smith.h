@@ -2,6 +2,7 @@
 
 #include "util.h"
 #include <cuda_runtime.h>
+#include "hash_table.h"
 
 using namespace std;
 
@@ -121,6 +122,18 @@ private:
     int width, height, thread_num;
     int* data;
 };
+void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s);
+
+void cigar_to_index_and_report(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s,
+            //    uint32_t* num_task,
+               int* score, Task* task, const char* q, const char* c);
+void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c);
 void generate_report(SWResult *res, const char* q, const char* c);
 // void smith_waterman(const char *q, const char *c, const size_t *q_idxs, const size_t *q_lens, const size_t *c_idxs, const size_t *c_lens, size_t num_task, vector<SWResult> &res);
 
@@ -129,7 +142,16 @@ void generate_report(SWResult *res, const char* q, const char* c);
 void smith_waterman_kernel(const int idx, SWResult *res, SWTasks* sw_task);
 void cpu_kernel (SWResult *res, 
                 const char *q, const char* c, 
-                size_t c_len, uint32_t q_idx, uint32_t n,
+                size_t c_len, 
+                uint32_t q_idx, uint32_t n,
                 uint32_t diag, const int band_width);
+
+
+void cpu_kernel(SWResult *res, 
+                const char *q, const char* c, 
+                size_t c_len, 
+                int64_t c_begin, int64_t c_end,
+                uint32_t q_begin, uint32_t q_len,
+                const int band_width);
 
 void gasal_run(SWTasks tasks, vector<SWResult> res[][NUM_STREAM],const char* q_dev, const char* s_dev, int num_g, int span);
