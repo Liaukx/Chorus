@@ -152,11 +152,11 @@ __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_len
                 size_t* q_end_d, size_t* s_end_d,
                 char* cigar_op_d, int* cigar_cnt_d,int* cigar_len_d,
                 int *rd, record* rt_d,int band_width,
-                int* BLOSUM62_d)
+                const int* BLOSUM62_d)
 {
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
     
-    int* BLOSUM62 = BLOSUM62_d + idx * 26 * 26;
+    const int* BLOSUM62 = BLOSUM62_d;
     record* rt = rt_d + idx * MaxBW * (TILE_SIZE + 1);
     
     for (size_t global_idx = idx; global_idx < (*totalTasks); global_idx += BatchSize) {
@@ -743,6 +743,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         CUDA_CALL(cudaMemcpyToSymbol(kHashTableOffset_dev, kHashTableOffset_host, sizeof(uint32_t) * MAX_QUERY_PER_GROUP * MAX_GROUPS_PER_ROUND));
 
         cudaStream_t streams[NUM_STREAM];
+        // cudaStream_t malloc_streams[NUM_STREAM];
         thread result_threads[n_groups][NUM_STREAM];
         cudaEvent_t kernels_done[NUM_STREAM][n_groups];
         cudaEvent_t copies_done[NUM_STREAM][n_groups];
@@ -788,6 +789,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         for (int s = 0; s < NUM_STREAM; s++)
         {
             CUDA_CALL(cudaStreamCreate(&streams[s]));
+            // CUDA_CALL(cudaStreamCreate(&malloc_streams[s]));
 #ifdef USE_GPU_DIFFUSE
             
             // CUDA_CALL(cudaMallocAsync((void**)&res_d[s],BatchSize * sizeof(SWResult_d),streams[s]));
@@ -804,9 +806,8 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 CUDA_CALL(cudaMallocAsync((void**)&cigar_cnt_d[s][g], MaxNumBatch * BatchSize * sizeof(int) * MaxAlignLen,streams[s]));
                 CUDA_CALL(cudaMallocAsync((void**)&cigar_len_d[s][g], MaxNumBatch * BatchSize * sizeof(int),streams[s]));
             }
-            CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int) * BatchSize,streams[s]));
-            for(int i = 0; i < BatchSize; ++ i)
-                CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s] + i * 26 * 26, BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,streams[s]));
+            CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int),streams[s]));
+            CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s], BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,streams[s]));
            
 #endif
             pHashTable[s] = create_hashtable_async(max_hashtable_capacity,streams[s]);
