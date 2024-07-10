@@ -7,7 +7,7 @@ void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
                size_t* c_start,
                std::vector<SWResult>& res_s)
 {
-    assert(cigar_len[idx]);
+    assert(cigar_len[idx] > 0);
     size_t cur_q = q_start[idx];
     size_t cur_c = c_start[idx];
     for(int i = 0; i < cigar_len[idx]; i ++){

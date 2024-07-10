@@ -144,6 +144,7 @@ __global__ void filter_kernel(KeyValue *ht, Task *tasks, uint32_t *num_task, uin
     // size_t each_length = (total_length-1)/b + 1;
 }
 
+
 __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* q, const char* c, size_t c_len,
                 int * score_d,
@@ -168,7 +169,7 @@ __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_len
         size_t diag  = task[global_idx].key;
         
         int64_t c_begin = (int64_t)diag - band_width - n + 2;
-        // size_t c_end = diag + band_width;
+        size_t c_end = diag + band_width;
        
         // size_t width = 2 * band_width + 1;
         size_t height = MaxQueryLen + 1;
@@ -244,6 +245,9 @@ __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_len
 
         score_d[global_idx] = Score;
         // res[global_idx].score = Score;
+        if(Score == 0){
+            printf("## it = %d\n",global_idx);
+        }
         assert(Score != 0);
 
         size_t cur_q= max_q;
@@ -254,9 +258,9 @@ __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_len
 
         int cnt_q = 0, cnt_c = 0;
         int cigar_len = 0;
+        assert(rd[BatchSize * calIndex(cur_c,cur_q,height) + idx] != 0);
         while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx])
         {
-            if(cigar_len >= MaxAlignLen)break;
             int d = rd[BatchSize * calIndex(cur_c,cur_q,height) + idx];
             // size_t res_q = (d&0x01) ? (cur_q + q_idx) : (size_t)-1;
             // size_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : (size_t)-1;
@@ -552,7 +556,7 @@ void call_results(cudaEvent_t& event, const char* query, const char* subj,
                 int* score_h,
                 std::vector<SWResult>& res_s,
                 ThreadPool* pool, std::vector<std::future<int>>& rs) {
-    CUDA_CALL(cudaEventSynchronize(event));
+    // CUDA_CALL(cudaEventSynchronize(event));
     cout << "=";
     res_s.resize(*num_task);
     for (size_t i = 0; i < *num_task; ++i) {
@@ -863,7 +867,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 CUDA_CALL(cudaMemcpyAsync(cigar_cnt_h[s][g_idx], cigar_cnt_d[s][g_idx], MaxNumBatch * BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream[s][g_idx]));
                 CUDA_CALL(cudaMemcpyAsync(cigar_len_h[s][g_idx], cigar_len_d[s][g_idx], MaxNumBatch * BatchSize * sizeof(int), cudaMemcpyDeviceToHost,copy_stream[s][g_idx]));
                 CUDA_CALL(cudaEventRecord(copies_done[s][g_idx], copy_stream[s][g_idx]));
-                
+                CUDA_CALL(cudaEventSynchronize(copies_done[s][g_idx]));
                 result_threads[g_idx][s] = thread(call_results,
                                                 ref(copies_done[s][g_idx]), query, subj[s],
                                                 task_host[g_idx][s], task_num_host[g_idx][s],
