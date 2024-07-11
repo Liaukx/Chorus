@@ -26,7 +26,7 @@ using namespace std;
 #define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
-#define BatchSize 4096
+#define BatchSize 512
 #define MaxNumBatch 100
 // mutex mu1;
 
@@ -122,18 +122,18 @@ private:
     int width, height, thread_num;
     int* data;
 };
-void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+void cigar_to_index(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
                size_t* q_start,
                size_t* c_start,
                std::vector<SWResult>& res_s);
 
-void cigar_to_index_and_report(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
                size_t* q_start,
                size_t* c_start,
                std::vector<SWResult>& res_s,
             //    uint32_t* num_task,
                int* score, Task* task, const char* q, const char* c);
-void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c);
+void generate_report(size_t idx, int begin, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c);
 void generate_report(SWResult *res, const char* q, const char* c);
 // void smith_waterman(const char *q, const char *c, const size_t *q_idxs, const size_t *q_lens, const size_t *c_idxs, const size_t *c_lens, size_t num_task, vector<SWResult> &res);
 

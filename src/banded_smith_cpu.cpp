@@ -2,7 +2,7 @@
 // #include <libunwind.h>
 // #include <gperftools/tcmalloc.h>
 
-void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+void cigar_to_index(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
                size_t* q_start,
                size_t* c_start,
                std::vector<SWResult>& res_s)
@@ -20,8 +20,8 @@ void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
 
             int tmp_q = (d&0x01) ? (cur_q) : -1;
             int tmp_c = (d&0x02) ? (cur_c) : -1;
-            res_s[idx].q_res.push_back(tmp_q);
-            res_s[idx].s_res.push_back(tmp_c);
+            res_s[begin + idx].q_res.push_back(tmp_q);
+            res_s[begin + idx].s_res.push_back(tmp_c);
 
             //TOP 01b, left 10b, diag 11b
             //DIAG : cur_q -= 1, cur_c -= 1
@@ -32,9 +32,9 @@ void cigar_to_index(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
         }
     
     }
-    reverse(res_s[idx].q_res.begin(),res_s[idx].q_res.end());
-    reverse(res_s[idx].s_res.begin(),res_s[idx].s_res.end());
-    assert(res_s[idx].q_res.size() && res_s[idx].s_res.size());
+    reverse(res_s[begin + idx].q_res.begin(),res_s[begin + idx].q_res.end());
+    reverse(res_s[begin + idx].s_res.begin(),res_s[begin + idx].s_res.end());
+    assert(res_s[begin + idx].q_res.size() && res_s[begin + idx].s_res.size());
 }
 
 void generate_report(SWResult *res, const char* q, const char* c){
@@ -134,28 +134,28 @@ void generate_report(SWResult *res, const char* q, const char* c){
 }
 
 
-void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c){
-    res_s[idx].score = score[idx];
-    res_s[idx].num_q = task[idx].q_id;
-    size_t len = res_s[idx].s_res.size();
-    res_s[idx].align_length = len;
-    res_s[idx].bitscore = (E_lambda * res_s[idx].score - log(E_k)) / (0.69314718055995);
+void generate_report(size_t idx, int begin, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c){
+    res_s[begin + idx].score = score[idx];
+    res_s[begin + idx].num_q = task[idx].q_id;
+    size_t len = res_s[begin + idx].s_res.size();
+    res_s[begin + idx].align_length = len;
+    res_s[begin + idx].bitscore = (E_lambda * res_s[begin + idx].score - log(E_k)) / (0.69314718055995);
     char s[len + 1] = {0};
     char q_seq[len + 1] = {0};
     char s_ori[len + 1] = {0};
     char match[len + 1] = {0};
     int s_ori_len = 0;
-    res_s[idx].gap_open = 0;
-    res_s[idx].gaps = 0;
+    res_s[begin + idx].gap_open = 0;
+    res_s[begin + idx].gaps = 0;
     bool ga = false;
     for (int i = 0; i < len; i++)
     {
         // cout<<c_res[t][i]<<" ";
-        if (res_s[idx].s_res[i] != (size_t)(-1))
+        if (res_s[begin + idx].s_res[i] != (size_t)(-1))
         {
             ga = false;
-            // printf("res_s[idx].s_res[i] = %d\n",res_s[idx].s_res[i]);
-            s[i] = get_char(c, res_s[idx].s_res[i]) + 65;
+            // printf("res_s[begin + idx].s_res[i] = %d\n",res_s[begin + idx].s_res[i]);
+            s[i] = get_char(c, res_s[begin + idx].s_res[i]) + 65;
             if (s[i] == 95)
                 s[i] = '*';
             s_ori[s_ori_len++] = s[i];
@@ -163,11 +163,11 @@ void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task*
         else
         {
             s[i] = '-';
-            res_s[idx].gaps++;
+            res_s[begin + idx].gaps++;
             if (!ga)
             {
                 ga = true;
-                res_s[idx].gap_open++;
+                res_s[begin + idx].gap_open++;
             }
         }
     }
@@ -177,7 +177,7 @@ void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task*
         string s_ori_str(s_ori, len);
         if (!check_include(s_ori_str))
         {
-            res_s[idx].report = false;
+            res_s[begin + idx].report = false;
             return;
         }
     }
@@ -185,35 +185,35 @@ void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task*
     for (int i = 0; i < len; i++)
     {
         // cout<<q_res[t][i]<<" ";
-        if (res_s[idx].q_res[i] != (size_t)(-1))
+        if (res_s[begin + idx].q_res[i] != (size_t)(-1))
         {
             ga = false;
-            q_seq[i] = q[res_s[idx].q_res[i]] + 65;
+            q_seq[i] = q[res_s[begin + idx].q_res[i]] + 65;
         }
         else
         {
             q_seq[i] = '-';
-            res_s[idx].gaps++;
+            res_s[begin + idx].gaps++;
             if (!ga)
             {
                 ga = true;
-                res_s[idx].gap_open++;
+                res_s[begin + idx].gap_open++;
             }
         }
     }
-    res_s[idx].mismatch = 0;
-    res_s[idx].positive = 0;
+    res_s[begin + idx].mismatch = 0;
+    res_s[begin + idx].positive = 0;
     for (int i = 0; i < len; i++)
     {
         match[i]=' ';
         if (BLOSUM62[(q_seq[i] - 65) * 26 + (s[i] - 65)] > 0 && q_seq[i]!='-' && s[i]!='-')
         {
-            res_s[idx].positive++;
+            res_s[begin + idx].positive++;
             match[i]='+';
         }
         if (q_seq[i] != s[i])
         {
-            res_s[idx].mismatch++;
+            res_s[begin + idx].mismatch++;
         }
         else
         {
@@ -221,14 +221,14 @@ void generate_report(size_t idx, std::vector<SWResult>& res_s, int* score, Task*
         }
             
     }
-    res_s[idx].n_identity = res_s[idx].align_length - res_s[idx].mismatch;
-    res_s[idx].p_identity = (1 - (double)res_s[idx].mismatch / res_s[idx].align_length) * 100;
+    res_s[begin + idx].n_identity = res_s[begin + idx].align_length - res_s[begin + idx].mismatch;
+    res_s[begin + idx].p_identity = (1 - (double)res_s[begin + idx].mismatch / res_s[begin + idx].align_length) * 100;
     if (detailed_alignment)
     {
-        res_s[idx].q = q_seq;
-        res_s[idx].s = s;
-        res_s[idx].s_ori = s_ori;
-        res_s[idx].match = match;
+        res_s[begin + idx].q = q_seq;
+        res_s[begin + idx].s = s;
+        res_s[begin + idx].s_ori = s_ori;
+        res_s[begin + idx].match = match;
     }
 }
 // CPU做一个分Batch的
@@ -617,7 +617,7 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 // }
 
 
-void cigar_to_index_and_report(size_t idx, int* cigar_len, char* cigar_op, int* cigar_cnt,
+void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
                size_t* q_start,
                size_t* c_start,
                std::vector<SWResult>& res_s,
@@ -625,7 +625,7 @@ void cigar_to_index_and_report(size_t idx, int* cigar_len, char* cigar_op, int* 
                int* score, Task* task, const char* query, const char* target)
 {
     // res_s.resize(*num_task);
-    cigar_to_index(idx, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
-    generate_report(idx, res_s, score, task, query, target);
+    cigar_to_index(idx, begin, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
+    generate_report(idx, begin, res_s, score, task, query, target);
     assert(res_s.size());
 }
