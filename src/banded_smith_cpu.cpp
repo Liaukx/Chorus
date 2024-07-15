@@ -2,201 +2,42 @@
 // #include <libunwind.h>
 // #include <gperftools/tcmalloc.h>
 
-#define max2(m, n) ((m) > (n) ? (m) : (n))
-#define max3(m, n, p) ((m) > (n) ? ((m) > (p) ? (m) : (p)) : ((n) > (p) ? (n) : (p)))
-#define MASK5(v) (v & 0b11111)
-#define END 0
-#define TOP 1
-#define LEFT 2
-#define DIAG 3
-
-// mutex mu1;
-
-typedef struct
+void cigar_to_index(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s)
 {
-    int d;
-    int x; // top
-    int y; // left
-    int m; // left top
-    int s;
-} record;
+    assert(cigar_len[idx] > 0);
+    size_t cur_q = q_start[idx];
+    size_t cur_c = c_start[idx];
+    for(int i = 0; i < cigar_len[idx]; i ++){
+        int cur = (cigar_cnt + idx * MaxAlignLen)[i];
+        char op = (cigar_op + idx * MaxAlignLen)[i];
+        int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT));
+        
 
-inline char get_char(const char *s, size_t offset)
-{
-    size_t n_bit = offset * 5;
-    return MASK5((unsigned)((*((uint16_t *)&(s[n_bit >> 3]))) >> (n_bit & 7)));
+        for(int j = 0; j < cur; ++ j){
+
+            int tmp_q = (d&0x01) ? (cur_q) : -1;
+            int tmp_c = (d&0x02) ? (cur_c) : -1;
+            res_s[begin + idx].q_res.push_back(tmp_q);
+            res_s[begin + idx].s_res.push_back(tmp_c);
+
+            //TOP 01b, left 10b, diag 11b
+            //DIAG : cur_q -= 1, cur_c -= 1
+            //TOP : cur_q -= 1, 
+            //LEFT : cur_c -= 1
+            cur_q -= (d == DIAG || d == TOP);
+            cur_c -= (d == LEFT || d == DIAG); // Decrement cur_c if LEFT (10b)
+        }
+    
+    }
+    reverse(res_s[begin + idx].q_res.begin(),res_s[begin + idx].q_res.end());
+    reverse(res_s[begin + idx].s_res.begin(),res_s[begin + idx].s_res.end());
+    assert(res_s[begin + idx].q_res.size() && res_s[begin + idx].s_res.size());
 }
 
-void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
-{
-    const char *q = sw_task->q;
-    const char *c = sw_task->c;
-    size_t c_len = sw_task->c_len;
-    size_t q_idx = sw_task->q_idxs[idx];
-    size_t n = sw_task->q_lens[idx];
-    size_t diag = sw_task->diags[idx]; //  pos of c at end of q
-    int64_t c_begin = (int64_t)diag - band_width - n + 2;
-    size_t c_end = diag + band_width;
-
-    if (has_must_include)
-    {
-        if (!check_include(c, c_begin, c_end))
-        {
-            res->report = false;
-            return;
-        }
-    }
-
-    size_t width = 2 * band_width + 1;
-    size_t height = n + 1;
-
-    // short *s = (short *)malloc(width * height * sizeof(short));
-    // char *p = (char *)malloc(width * height * sizeof(char));
-    record *r = (record *)malloc(width * height * sizeof(record));
-
-    if (r == nullptr)
-    {
-        printf("CPU out of memory!\n");
-        exit(-1);
-        return;
-    }
-
-    // memset(s, 0, width * height * sizeof(short));
-    // memset(p, 0, width * height * sizeof(char));
-    memset(r, 0, width * height * sizeof(record));
-
-    size_t max_q = 0;
-    size_t max_c = 0;
-    
-    size_t offset_q = q_idx, offset_c = c_begin;
-
-    for(size_t _q = 1; _q < height; ++_q){
-        for(size_t _c = 1; _c < width-1; ++_c){
-            if (offset_c + _c-1+_q-1 < 0 || offset_c + _c-1+_q-1 >= c_len)
-            {
-                continue;
-            }
-
-            char chq = q[offset_q + _q-1];
-            char chc = get_char(c, offset_c + _c-1+_q-1);
-            
-            if (chq == END_SIGNAL || chc == END_SIGNAL)
-            {
-                continue;
-            }
-
-            assert(_q * width + _c < width * height);
-            assert(_q - 1 >= 0);
-            assert(_c + 1 < height);
-            assert(_c - 1 >= 0);
-
-            r[_c * height + _q].x = max3(r[(_c + 1) * height + (_q - 1)].x + SCORE_GAP_EXT,  r[(_c + 1) * height + (_q - 1)].m + SCORE_GAP, 0);
-            r[_c * height + _q].y = max3(r[(_c - 1) * height + _q].y + SCORE_GAP_EXT, r[(_c - 1) * height + _q].m + SCORE_GAP, 0);
-            // r[_q * width + _c].x = max3(r[(_q - 1) * width + (_c + 1)].x + SCORE_GAP_EXT,  r[(_q - 1) * width + (_c + 1)].m + SCORE_GAP, 0);
-            // r[_q * width + _c].y = max3(r[_q * width + (_c - 1)].y + SCORE_GAP_EXT, r[_q * width + (_c - 1)].m + SCORE_GAP, 0);
-
-            if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
-            {
-                // illegal word
-                // r[_q * width + _c].m = 0;
-                r[_c * height + _q].m = 0;
-            }
-            else
-            {
-                // r[_q * width + _c].m = max2(max3(r[(_q - 1) * width + _c].x, r[(_q - 1) * width + _c].y, r[(_q - 1) * width + _c].m) + BLOSUM62[chq * 26 + chc], 0);
-                r[_c * height+ _q].m = max2(max3(r[_c * height + (_q - 1)].x, r[_c * height + (_q - 1)].y, r[_c * height + (_q - 1)].m) + BLOSUM62[chq * 26 + chc], 0);
-            }
-
-            // r[_q * width + _c].s = max3(r[_q * width + _c].x, r[_q * width + _c].y, r[_q * width + _c].m);
-            r[_c * height + _q].s = max3(r[_c * height + _q].x, r[_c * height + _q].y, r[_c * height + _q].m);
-            // printf("(q = %c,c = %c) BLOSUM62 = %d r[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], r[_q * width + _c].s);
-            
-            if (r[_c * height + _q].s != 0)
-            {
-                if (r[_c * height + _q].s == r[_c * height + _q].x)
-                    r[_c * height + _q].d = TOP;
-                if (r[_c * height + _q].s == r[_c * height + _q].y)
-                    r[_c * height + _q].d = LEFT;
-                if (r[_c * height + _q].s == r[_c * height + _q].m)
-                    r[_c * height + _q].d = DIAG;
-            }
-            // if (r[_q * width + _c].s != 0)
-            // {
-            //     if (r[_q * width + _c].s == r[_q * width + _c].x)
-            //         r[_q * width + _c].d = TOP;
-            //     if (r[_q * width + _c].s == r[_q * width + _c].y)
-            //         r[_q * width + _c].d = LEFT;
-            //     if (r[_q * width + _c].s == r[_q * width + _c].m)
-            //         r[_q * width + _c].d = DIAG;
-            // }
-            // if (r[_q * width + _c].s > r[max_q * width + max_c].s)
-            // {
-            //     max_c = _c;
-            //     max_q = _q;
-            // }
-
-            if (r[_c * height + _q].s > r[max_c * height + max_q].s)
-            {
-                max_c = _c;
-                max_q = _q;
-            }
-            // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_j * width + max_i].s,r[_q * width + _c].d);
-        }
-    }
-
-    // for (int i = 0; i < height; i++)
-    // {
-    //     for (int j = 0; j < width; j++)
-    //     {
-    //         cout << s[j * height + i] << "\t";
-    //     }
-    //     cout << endl;
-    // }
-
-    // res->score = r[max_q * width + max_c].s;
-    res->score = r[max_c * height + max_q].s;
-    assert(res->score != 0);
-
-    size_t cur_q= max_q;
-    size_t cur_c = max_c;
-    
-    while (r[cur_c * height + cur_q].s > 0)
-    {
-        switch (r[cur_c * height + cur_q].d)
-    // while (r[cur_q * width + cur_c].s > 0)
-    // {
-    //     switch (r[cur_q * width + cur_c].d)
-        {
-        case DIAG:
-            res->q_res.push_back((cur_q-1) + q_idx);
-            res->s_res.push_back(c_begin + cur_c-1 + cur_q-1);
-            cur_q -= 1;
-            break;
-
-        case TOP:
-            res->q_res.push_back((cur_q-1) + q_idx);
-            res->s_res.push_back(-1);
-            cur_q -= 1;
-            cur_c += 1;
-            break;
-
-        case LEFT:
-            res->q_res.push_back(-1);
-            res->s_res.push_back(c_begin + cur_c-1 + cur_q-1);
-            cur_c -= 1;
-            break;
-
-        default:
-            printf("err\n");
-            break;
-        }
-    }
-
-    free(r);
-
-    reverse(res->q_res.begin(), res->q_res.end());
-    reverse(res->s_res.begin(), res->s_res.end());
-
+void generate_report(SWResult *res, const char* q, const char* c){
     size_t len = res->s_res.size();
     res->align_length = len;
     res->bitscore = (E_lambda * res->score - log(E_k)) / (0.69314718055995);
@@ -214,6 +55,7 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
         if (res->s_res[i] != (size_t)(-1))
         {
             ga = false;
+            // printf("res->s_res[i] = %d\n",res->s_res[i]);
             s[i] = get_char(c, res->s_res[i]) + 65;
             if (s[i] == 95)
                 s[i] = '*';
@@ -289,8 +131,455 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
         res->s_ori = s_ori;
         res->match = match;
     }
+}
+
+
+void generate_report(size_t idx, int begin, std::vector<SWResult>& res_s, int* score, Task* task, const char* q, const char* c){
+    res_s[begin + idx].score = score[idx];
+    res_s[begin + idx].num_q = task[idx].q_id;
+    size_t len = res_s[begin + idx].s_res.size();
+    res_s[begin + idx].align_length = len;
+    res_s[begin + idx].bitscore = (E_lambda * res_s[begin + idx].score - log(E_k)) / (0.69314718055995);
+    char s[len + 1] = {0};
+    char q_seq[len + 1] = {0};
+    char s_ori[len + 1] = {0};
+    char match[len + 1] = {0};
+    int s_ori_len = 0;
+    res_s[begin + idx].gap_open = 0;
+    res_s[begin + idx].gaps = 0;
+    bool ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<c_res[t][i]<<" ";
+        if (res_s[begin + idx].s_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            // printf("res_s[begin + idx].s_res[i] = %d\n",res_s[begin + idx].s_res[i]);
+            s[i] = get_char(c, res_s[begin + idx].s_res[i]) + 65;
+            if (s[i] == 95)
+                s[i] = '*';
+            s_ori[s_ori_len++] = s[i];
+        }
+        else
+        {
+            s[i] = '-';
+            res_s[begin + idx].gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res_s[begin + idx].gap_open++;
+            }
+        }
+    }
+
+    if (has_must_include)
+    {
+        string s_ori_str(s_ori, len);
+        if (!check_include(s_ori_str))
+        {
+            res_s[begin + idx].report = false;
+            return;
+        }
+    }
+    ga = false;
+    for (int i = 0; i < len; i++)
+    {
+        // cout<<q_res[t][i]<<" ";
+        if (res_s[begin + idx].q_res[i] != (size_t)(-1))
+        {
+            ga = false;
+            q_seq[i] = q[res_s[begin + idx].q_res[i]] + 65;
+        }
+        else
+        {
+            q_seq[i] = '-';
+            res_s[begin + idx].gaps++;
+            if (!ga)
+            {
+                ga = true;
+                res_s[begin + idx].gap_open++;
+            }
+        }
+    }
+    res_s[begin + idx].mismatch = 0;
+    res_s[begin + idx].positive = 0;
+    for (int i = 0; i < len; i++)
+    {
+        match[i]=' ';
+        if (BLOSUM62[(q_seq[i] - 65) * 26 + (s[i] - 65)] > 0 && q_seq[i]!='-' && s[i]!='-')
+        {
+            res_s[begin + idx].positive++;
+            match[i]='+';
+        }
+        if (q_seq[i] != s[i])
+        {
+            res_s[begin + idx].mismatch++;
+        }
+        else
+        {
+            match[i]=q_seq[i];
+        }
+            
+    }
+    res_s[begin + idx].n_identity = res_s[begin + idx].align_length - res_s[begin + idx].mismatch;
+    res_s[begin + idx].p_identity = (1 - (double)res_s[begin + idx].mismatch / res_s[begin + idx].align_length) * 100;
+    if (detailed_alignment)
+    {
+        res_s[begin + idx].q = q_seq;
+        res_s[begin + idx].s = s;
+        res_s[begin + idx].s_ori = s_ori;
+        res_s[begin + idx].match = match;
+    }
+}
+// CPU做一个分Batch的
+void cpu_kernel(SWResult *res, 
+                const char *q, const char* c, 
+                size_t c_len, uint32_t q_idx, uint32_t n,
+                // TODO pack 
+                uint32_t diag, const int band_width)
+{
+    //TODO 把banded 放到scoreMatrix的接口里，sw里面不体现
+    int64_t c_begin = (int64_t)diag - band_width - n + 2;
+    size_t c_end = diag + band_width;
+    if (has_must_include)
+    {
+        if (!check_include(c, c_begin, c_end))
+        {
+            res->report = false;
+            return;
+        }
+    }
+
+    size_t width = 2 * band_width + 1;
+    size_t height = n + 1;
+
+    // short *s = (short *)malloc(width * height * sizeof(short));
+    // char *p = (char *)malloc(width * height * sizeof(char));
+
+    int tileSize = 2;
+    size_t t_height = tileSize + 1;
+    
+    record *rt = (record *)malloc(width * t_height * sizeof(record));
+    int *rd = (int *)malloc(width * height * sizeof(int));
+
+    if (rd == nullptr || rt == nullptr)
+    {
+        printf("CPU out of memory!\n");
+        exit(-1);
+        return;
+    }
+
+    // memset(s, 0, width * height * sizeof(short));
+    // memset(p, 0, width * height * sizeof(char));
+    memset(rt, 0, width * t_height * sizeof(record));
+    memset(rd, 0, width * height * sizeof(int));
+
+    size_t max_q = 0;
+    size_t max_c = 0;
+    int score = 0, Score = 0;
+    // TODO index映射到tile里的index
+    // TODO 行列的tile?
+    // cal maxScore and it's position
+    for(size_t it = 0; it * tileSize < n; it ++){
+        
+        size_t q_offset = it * tileSize;
+
+        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < height-1; ++_q){
+            for(size_t _c = 0; _c < width-2; ++_c){
+                
+                if(c_begin + _c+ q_offset + _q < 0) continue;
+                if(c_begin + _c+ q_offset + _q >= c_len) break;
+
+                char chq = q[q_idx + q_offset + _q];
+                char chc = get_char(c, c_begin + q_offset + _c + _q);
+                
+                if (chq == END_SIGNAL || chc == END_SIGNAL)
+                {
+                    continue;
+                }
+                //rt(_q,_c) -> (_q+1) * width + _c + 1
+                // logical m(_q,_c).x = max(m(_q-1,_c).x + SCORE_GAP_EXT, m(_q-1,_c).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
+                
+                rt[calIndex(_q,_c,width)].x = max3(rt[calTop(_q,_c,width)].x + SCORE_GAP_EXT,  rt[calTop(_q,_c,width)].m + SCORE_GAP, 0);
+                rt[calIndex(_q,_c,width)].y = max3(rt[calLeft(_q,_c,width)].y + SCORE_GAP_EXT, rt[calLeft(_q,_c,width)].m + SCORE_GAP, 0);
+
+                if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                {
+                    // illegal word
+                    rt[calIndex(_q,_c,width)].m = 0;
+                }
+                else
+                {
+                    rt[calIndex(_q,_c,width)].m = max2(max3(rt[calDiag(_q,_c,width)].x, rt[calDiag(_q,_c,width)].y, rt[calDiag(_q,_c,width)].m) + BLOSUM62[chq * 26 + chc], 0);
+                }
+
+                score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
+                
+                if(score)
+                    rd[calIndex(_c, _q+q_offset, height)] = \
+                        (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                        ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                    
+                if (Score < score)
+                {
+                    Score = score;
+                    max_c = _c;
+                    max_q = _q + q_offset;
+                }
+                // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
+            }
+        }
+        memcpy(rt,rt + (t_height - 1) * width ,width * sizeof(record));
+        // Hit when target is not long enough, there are some cells should be zero
+        memset(rt + width, 0, (t_height - 1) *width * sizeof(record));
+
+    }
+
+    res->score = Score;
+    assert(res->score != 0);
+
+    size_t cur_q = max_q;
+    size_t cur_c = max_c;
+
+    while (rd[calIndex(cur_c,cur_q,height)])
+    {
+        int d = rd[calIndex(cur_c,cur_q,height)];
+        int64_t res_q = (d&0x01) ? (cur_q + q_idx) : -1;
+        int64_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : -1;
+        
+        res->q_res.push_back(res_q);
+        res->s_res.push_back(res_c);
+        //TOP 01b, left 10b, diag 11b
+        //DIAG : cur_q -= 1
+        //TOP : cur_q -= 1, cur_c += 1;
+        //LEFT : cur_c -= 1
+        (cur_q) -= (d == DIAG || d == TOP);
+        (cur_c) += (d == TOP);
+        (cur_c) -= (d == LEFT);
+    }
+
+    
+    // string Cigar = "";
+    // vector<int> cigar_len;
+    // cur_q = max_q;
+    // cur_c = max_c;
+    // while (rd[calIndex(cur_c,cur_q,height)])
+    // {
+    //     int d = rd[calIndex(cur_c,cur_q,height)];
+    //     int cur_cigar_cnt = 0;
+    //     while (rd[calIndex(cur_c,cur_q,height)] && rd[calIndex(cur_c,cur_q,height)]==d){
+    //         cur_cigar_cnt ++;
+    //         //TOP 01b, left 10b, diag 11b
+    //         //DIAG : cur_q -= 1
+    //         //TOP : cur_q -= 1, cur_c += 1;
+    //         //LEFT : cur_c -= 1
+    //         cur_q -= (d == DIAG || d == TOP);
+    //         cur_c += (d == TOP); // Increment cur_c if TOP (01b)
+    //         cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+    //     }
+    //     cigar_len.push_back(cur_cigar_cnt);
+    //     Cigar += ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+    // }
+    
+    // cur_q = max_q + q_idx;
+    // cur_c = c_begin + max_c + max_q;
+    // vector<int>q_res, s_res;
+    // for(int i = 0; i < cigar_len.size(); i ++){
+    //     int cur = cigar_len[i];
+    //     char op = Cigar[i];
+    //     int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT)); 
+    //     for(int j = 0; j < cur; ++ j){
+    //         int tmp_q = (d&0x01) ? (cur_q) : -1;
+    //         int tmp_c = (d&0x02) ? (cur_c) : -1;
+        
+    //         q_res.push_back(tmp_q);
+    //         s_res.push_back(tmp_c);
+
+    //         //TOP 01b, left 10b, diag 11b
+    //         //DIAG : cur_q -= 1, cur_c -= 1
+    //         //TOP : cur_q -= 1, 
+    //         //LEFT : cur_c -= 1
+    //         cur_q -= (d == DIAG || d == TOP);
+    //         cur_c -= (d == LEFT || d == DIAG); // Decrement cur_c if LEFT (10b)
+    //     }
+    
+    // }
+
+    free(rd);
+    free(rt);
+    // assert(q_res.size() == res->q_res.size());
+    // assert(s_res.size() == res->s_res.size());
+    
+    // for(int i = 0; i < q_res.size(); ++ i){
+    //     if(!(q_res[i] == res->q_res[i])){
+    //         printf("## error %d\n", i);
+    //     }
+    // }
+    // for(int i = 0; i < s_res.size(); ++ i){
+    //     if(!(s_res[i] == res->s_res[i])){
+    //         printf("## error %d\n", i);
+    //     }
+    // }
+    // assert(s_res[i] == res->s_res[i]);
+    // assert(q_res[i] == res->q_res[i]);
+
+    reverse(res->q_res.begin(), res->q_res.end());
+    reverse(res->s_res.begin(), res->s_res.end());
+    generate_report(res,q,c);
+}
+
+void cpu_kernel(SWResult *res, 
+                const char *q, const char* c, 
+                size_t c_len, 
+                int64_t c_begin, int64_t c_end,
+                uint32_t q_begin, uint32_t q_len,
+                const int band_width)
+{
+    uint32_t diag = (c_begin + c_end) >> 1;
+    size_t n = q_len;
+    
+    if (has_must_include)
+    {
+        if (!check_include(c, c_begin, c_end))
+        {
+            res->report = false;
+            return;
+        }
+    }
+
+    size_t width = 2 * band_width + 1;
+    size_t height = n + 1;
+
+    // short *s = (short *)malloc(width * height * sizeof(short));
+    // char *p = (char *)malloc(width * height * sizeof(char));
+
+    int tileSize = 2;
+    size_t t_height = tileSize + 1;
+    
+    record *rt = (record *)malloc(width * t_height * sizeof(record));
+    int *rd = (int *)malloc(width * height * sizeof(int));
+
+    if (rd == nullptr || rt == nullptr)
+    {
+        printf("CPU out of memory!\n");
+        exit(-1);
+        return;
+    }
+
+    // memset(s, 0, width * height * sizeof(short));
+    // memset(p, 0, width * height * sizeof(char));
+    memset(rt, 0, width * t_height * sizeof(record));
+    memset(rd, 0, width * height * sizeof(int));
+
+    size_t max_q = 0;
+    size_t max_c = 0;
+    int score = 0, Score = 0;
+    // cal maxScore and it's position
+    for(size_t it = 0; it * tileSize < n; it ++){
+        
+        size_t q_offset = it * tileSize;
+
+        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < height-1; ++_q){
+            for(size_t _c = 0; _c < width-2; ++_c){
+                
+                if(c_begin + _c+ q_offset + _q < 0) continue;
+                if(c_begin + _c+ q_offset + _q >= c_len) break;
+
+                char chq = q[q_begin + q_offset + _q];
+                char chc = get_char(c, c_begin + q_offset + _c + _q);
+                
+                if (chq == END_SIGNAL || chc == END_SIGNAL)
+                {
+                    continue;
+                }
+                //rt(_q,_c) -> (_q+1) * width + _c + 1
+                // logical m(_q,_c).x = max(m(_q-1,_c).x + SCORE_GAP_EXT, m(_q-1,_c).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
+                // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
+                
+                rt[calIndex(_q,_c,width)].x = max3(rt[calTop(_q,_c,width)].x + SCORE_GAP_EXT,  rt[calTop(_q,_c,width)].m + SCORE_GAP, 0);
+                rt[calIndex(_q,_c,width)].y = max3(rt[calLeft(_q,_c,width)].y + SCORE_GAP_EXT, rt[calLeft(_q,_c,width)].m + SCORE_GAP, 0);
+
+                if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                {
+                    // illegal word
+                    rt[calIndex(_q,_c,width)].m = 0;
+                }
+                else
+                {
+                    rt[calIndex(_q,_c,width)].m = max2(max3(rt[calDiag(_q,_c,width)].x, rt[calDiag(_q,_c,width)].y, rt[calDiag(_q,_c,width)].m) + BLOSUM62[chq * 26 + chc], 0);
+                }
+
+                score = max3(rt[calIndex(_q,_c,width)].x, rt[calIndex(_q,_c,width)].y, rt[calIndex(_q,_c,width)].m);
+                
+                if(score)
+                    rd[calIndex(_c, _q+q_offset, height)] = \
+                        (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                        ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                
+                if (Score < score)
+                {
+                    Score = score;
+                    max_c = _c;
+                    max_q = _q + q_offset;
+                }
+                // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
+            }
+        }
+        memcpy(rt,rt + (t_height - 1) * width ,width * sizeof(record));
+        // Hit when target is not long enough, there are some cells should be zero
+        memset(rt + width, 0, (t_height - 1) *width * sizeof(record));
+
+    }
+
+    res->score = Score;
+    assert(res->score != 0);
+
+    size_t cur_q = max_q;
+    size_t cur_c = max_c;
+    
+    while (rd[calIndex(cur_c,cur_q,height)])
+    {
+        int d = rd[calIndex(cur_c,cur_q,height)];
+        int64_t res_q = (d&0x01) ? (cur_q + q_begin) : -1;
+        int64_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : -1;
+        
+        res->q_res.push_back(res_q);
+        res->s_res.push_back(res_c);
+        //TOP 01b, left 10b, diag 11b
+        //DIAG : cur_q -= 1
+        //TOP : cur_q -= 1, cur_c += 1;
+        //LEFT : cur_c -= 1
+        (cur_q) -= (d == DIAG || d == TOP);
+        (cur_c) += (d == TOP);
+        (cur_c) -= (d == LEFT);
+    }
+
+    free(rd);
+    free(rt);
+
+    reverse(res->q_res.begin(), res->q_res.end());
+    reverse(res->s_res.begin(), res->s_res.end());
+    generate_report(res,q,c);
+}
+
+void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
+{
+    const char *q = sw_task->q;
+    const char *c = sw_task->c;
+    size_t c_len = sw_task->c_len;
+    size_t q_idx = sw_task->q_idxs[idx];
+    size_t n = sw_task->q_lens[idx];
+    size_t diag = sw_task->diags[idx]; //  pos of c at end of q
+    int64_t c_begin = (int64_t)diag - band_width - n + 2;
+    size_t c_end = diag + band_width;
+    cpu_kernel(res,q,c,c_len,q_idx,n,diag,band_width);
+    // cpu_kernel(res,q,c,c_len,c_begin,c_end,q_idx,n,band_width);
 
 }
+
 // void banded_smith_waterman(const char *q, const char *c, vector<uint32_t> &q_idxs, vector<uint32_t> &q_lens, vector<size_t> &diags, size_t c_len, size_t num_task, vector<SWResult> &res, ThreadPool *pool, vector<future<int>> &rs)
 // {
 // mu1.lock();
@@ -326,3 +615,17 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
 // mu1.unlock();
 // }
+
+
+void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
+               size_t* q_start,
+               size_t* c_start,
+               std::vector<SWResult>& res_s,
+            //    uint32_t* num_task,
+               int* score, Task* task, const char* query, const char* target)
+{
+    // res_s.resize(*num_task);
+    cigar_to_index(idx, begin, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
+    generate_report(idx, begin, res_s, score, task, query, target);
+    assert(res_s.size());
+}

@@ -97,7 +97,7 @@ struct SWResult
     bool report = true;
     int num_q;
     // size_t num_s;
-    vector<int> q_res;
+    vector<size_t> q_res;
     vector<size_t> s_res;
     int score;
     int bitscore;
