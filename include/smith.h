@@ -26,7 +26,7 @@ using namespace std;
 #define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
-#define BatchSize 512
+#define BatchSize 2048
 #define MaxNumBatch 100
 // mutex mu1;
 
