@@ -770,6 +770,9 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         for(int s = 0; s < NUM_STREAM; ++ s){
             CUDA_CALL(cudaStreamCreate(&streams[s]));
             CUDA_CALL(cudaStreamCreate(&malloc_streams[s]));
+            CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int), malloc_streams[s]));
+            CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s], BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,malloc_streams[s]));
+           
             for(int cur = 0; cur < MaxNumBatch; ++ cur){
                 cudaStreamCreate(&copy_streams[s][cur]);
 
@@ -816,8 +819,6 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                     CUDA_CALL(cudaEventCreate(&copies_done[s][cur]));
                     CUDA_CALL(cudaEventCreate(&kernels_done[s][cur]));
                 }
-                CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d[s], 26 * 26 * sizeof(int), malloc_streams[s]));
-                CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d[s], BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,malloc_streams[s]));
            
 #endif
 
@@ -1006,7 +1007,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
         for (int s = 0; s < NUM_STREAM; s++)
         {
-            CUDA_CALL(cudaFreeAsync(BLOSUM62_d[s], streams[s])); 
+            CUDA_CALL(cudaFreeAsync(BLOSUM62_d[s], malloc_streams[s])); 
             CUDA_CALL(cudaStreamDestroy(streams[s]));
             CUDA_CALL(cudaStreamDestroy(malloc_streams[s]));
 #ifdef USE_GPU_DIFFUSE          
