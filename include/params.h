@@ -5,11 +5,11 @@
 #include <vector>
 #include <string>
 
-#define NUM_STREAM 16
+#define NUM_STREAM 1
 #define STREAM_SYNC 0
-#define MAX_QUERY_PER_GROUP 4096
+#define MAX_QUERY_PER_GROUP 1024
 #define MAX_NUM_GROUPS 256
-#define MAX_GROUPS_PER_ROUND 1 //larger more cpu memory
+#define MAX_GROUPS_PER_ROUND 4 //larger more cpu memory
 #define FILTER_ALL_SAME_AA_SEED true
 #define MAX_FILTER_TASK 800000
 
