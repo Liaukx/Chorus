@@ -575,13 +575,27 @@ void call_results(cudaEvent_t& event, \
     // cout << "=";
 
     for (size_t i = 0; i < num_task; ++i) {
-        // rs.emplace_back(pool->enqueue([&, i] {
+        rs.emplace_back(pool->enqueue([&, i] {
             
             cigar_to_index_and_report(i, begin, cigar_len_h, cigar_op_h, cigar_cnt_h,
                         q_end_h, s_end_h, res_s, score_h, task_host, query, subj);
             
-        //     return static_cast<int>(i);
-        // }));
+            return static_cast<int>(i);
+        }));
+    }
+}
+__global__ void initializeArray_rd(int* array, int value, size_t numElements) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements) {
+        array[idx] = value;
+    }
+}
+__global__ void initializeArray_rt(record* array, int value, size_t numElements) {
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements) {
+        array[idx].x = value;
+        array[idx].y = value;
+        array[idx].m = value;
     }
 }
 // void CUDART_CB hostCallBack(cudaStream_t stream, cudaError_t status,void* userData) {
@@ -704,6 +718,8 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     int direct_matrixSize = (MaxQueryLen+1) * MaxBW;
     int threadsPerBlock = 64;  // 根据 shared memory 限制调整
     int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
+    int blocks_rd = (direct_matrixSize * BatchSize + threadsPerBlock - 1) / threadsPerBlock;
+    int blocks_rt = (MaxBW * (TILE_SIZE + 1) * BatchSize + threadsPerBlock - 1) / threadsPerBlock;
     
     int* rd[n_groups][NUM_STREAM][MaxNumBatch];   // direct_matrixSize * BatchSize * sizeof(int)
     record* rt[n_groups][NUM_STREAM][MaxNumBatch];
@@ -744,10 +760,10 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     cudaStream_t malloc_streams;
     CUDA_CALL(cudaStreamCreate(&streams));
     CUDA_CALL(cudaStreamCreate(&malloc_streams));
-    CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d, 26 * 26 * sizeof(int), malloc_streams));
-    CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d, BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,malloc_streams));
     vector<size_t> s_begin_vec;
 #ifdef USE_GPU_DIFFUSE
+    CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d, 26 * 26 * sizeof(int), malloc_streams));
+    CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d, BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,malloc_streams));
     cudaStream_t copy_streams[MaxNumBatch];
     for(int cur = 0; cur < MaxNumBatch; ++ cur){
         cudaStreamCreate(&copy_streams[cur]);
@@ -828,7 +844,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                 }
 #endif
                 // pHashTable[g_idx][s] = create_hashtable(max_hashtable_capacity);
-                CUDA_CALL(cudaStreamSynchronize(malloc_streams));
+                // CUDA_CALL(cudaStreamSynchronize(malloc_streams));
                 pHashTable[g_idx][s] = create_hashtable_async(max_hashtable_capacity,malloc_streams);
                 size_t s_length_stream = s_length[s];
                 size_t s_length_stream_byte = s_length_stream / 8 * 5;
@@ -871,14 +887,26 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                     if(it > *task_num_host[g_idx][s]) break;
                     if(it+BatchSize >= *task_num_host[g_idx][s]){
                         num_task =  *task_num_host[g_idx][s] - it;
+                                                num_task =  *task_num_host[g_idx][s] - it;
+                        if(num_task < (BatchSize >> 1)){
+#pragma omp parallel for
+                            for(size_t i = 0; i < num_task; i++){   
+                                cpu_kernel(&res_s[g][s][i + it],query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][i + it].q_id],q_groups[g].length[task_host[g_idx][s][i + it].q_id],task_host[g_idx][s][i + it].key,band_width);
+                                res_s[g][s][i + it].num_q = task_host[g_idx][s][i + it].q_id;
+                                // generate_report(&res_s[g][s][i + it],query, subj[s]);
+                            }
+                            break;
+                        }
                     }
                     num_task_vec.push_back(num_task);
                     
                     
                     CUDA_CALL(cudaMallocAsync((void**)&rd[g_idx][s][cur], direct_matrixSize * BatchSize * sizeof(int), streams));
                     CUDA_CALL(cudaMallocAsync((void**)&rt[g_idx][s][cur], MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record), streams));
-                    CUDA_CALL(cudaMemsetAsync(rd[g_idx][s][cur], 0, direct_matrixSize * BatchSize * sizeof(int),  streams));
-                    CUDA_CALL(cudaMemsetAsync(rt[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record),  streams));
+                    // CUDA_CALL(cudaMemsetAsync(rd[g_idx][s][cur], 0, direct_matrixSize * BatchSize * sizeof(int),  streams));
+                    // CUDA_CALL(cudaMemsetAsync(rt[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record),  streams));
+                    initializeArray_rd<<<blocks_rd, threadsPerBlock, 0, streams>>>(rd[g_idx][s][cur], 0, direct_matrixSize * BatchSize);
+                    initializeArray_rt<<<blocks_rt, threadsPerBlock, 0, streams>>>(rt[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize);
                     
                     CUDA_CALL(cudaMallocAsync((void**)&cigar_op_d[g_idx][s][cur], BatchSize * sizeof(char) * MaxAlignLen, streams));
                     CUDA_CALL(cudaMallocAsync((void**)&cigar_cnt_d[g_idx][s][cur], BatchSize * sizeof(int) * MaxAlignLen, streams));
