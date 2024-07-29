@@ -299,28 +299,27 @@ __global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_len
 __global__ void banded_sw_kernel(
                 int NumTasks,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
-                const char* q, const char* c, size_t c_len,
-                int * score_d,
-                size_t* q_end_d, size_t* s_end_d,
-                char* cigar_op_d, int* cigar_cnt_d,int* cigar_len_d,
-                int *rd, record* rt_d,int band_width,
-                int* BLOSUM62_d){
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *rd, record* rt,int band_width,
+                int* BLOSUM62){
 
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
     if(idx >= NumTasks) return;
 
-    size_t n = q_lens[task[idx].q_id];
-    if(n > MaxQueryLen) printf("## Query Len %ld\n", n);
-    assert( n < MaxQueryLen);
+    size_t query_len = q_lens[task[idx].q_id];
+    assert( query_len < MaxQueryLen);
    
     size_t q_idx  = q_idxs[task[idx].q_id];
     size_t diag  = task[idx].key;
     
-    int64_t c_begin = (int64_t)diag - band_width - n + 2;
+    int64_t c_begin = (int64_t)diag - band_width - query_len + 2;
     // size_t c_end = diag + band_width;
-    int* BLOSUM62 = BLOSUM62_d;
-    record* rt = rt_d + idx * MaxBW * (TILE_SIZE + 1);
+    
+    record* tile = rt + idx * MaxBW * (TILE_SIZE + 1);
     
     // __shared__ int shared_BLOSUM62[26 * 26];
     
@@ -337,7 +336,7 @@ __global__ void banded_sw_kernel(
     assert(width < MaxBW);
 
     //init:
-    score_d[idx] = 0;
+    max_score[idx] = 0;
     
     size_t t_height = TILE_SIZE + 1;
     
@@ -348,18 +347,18 @@ __global__ void banded_sw_kernel(
     size_t max_c = 0;
     int score = 0, Score = 0;
     // cal maxScore and it's position
-    for (size_t it = 0; it * TILE_SIZE < n; it++) {
+    for (size_t it = 0; it * TILE_SIZE < query_len; it++) {
         
         size_t q_offset = it * TILE_SIZE;
 
-        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < n; ++_q){
+        for(size_t _q = 0; _q < t_height-1 && q_offset + _q < query_len; ++_q){
             for(size_t _c = 0; _c < width-2; ++_c){
                 
                 if(c_begin + _c+ q_offset + _q < 0) continue;
-                if(c_begin + _c+ q_offset + _q >= c_len) break;
+                if(c_begin + _c+ q_offset + _q >= target_len) break;
 
-                char chq = q[q_idx + q_offset + _q];
-                char chc = get_char_d(c, c_begin + q_offset + _c + _q);
+                char chq = query[q_idx + q_offset + _q];
+                char chc = get_char_d(target, c_begin + q_offset + _c + _q);
                 
                 if (chq == END_SIGNAL || chc == END_SIGNAL)
                 {
@@ -370,27 +369,27 @@ __global__ void banded_sw_kernel(
                 // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
                 // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
                 
-                rt[calIndex(_q,_c,MaxBW)].x = max3(rt[calTop(_q,_c,MaxBW)].x + SCORE_GAP_EXT,  rt[calTop(_q,_c,MaxBW)].m + SCORE_GAP, 0);
-                rt[calIndex(_q,_c,MaxBW)].y = max3(rt[calLeft(_q,_c,MaxBW)].y + SCORE_GAP_EXT, rt[calLeft(_q,_c,MaxBW)].m + SCORE_GAP, 0);
+                tile[calIndex(_q,_c,MaxBW)].x = max3(tile[calTop(_q,_c,MaxBW)].x + SCORE_GAP_EXT,  tile[calTop(_q,_c,MaxBW)].m + SCORE_GAP, 0);
+                tile[calIndex(_q,_c,MaxBW)].y = max3(tile[calLeft(_q,_c,MaxBW)].y + SCORE_GAP_EXT, tile[calLeft(_q,_c,MaxBW)].m + SCORE_GAP, 0);
 
                 if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
                 {
                     // illegal word
-                    rt[calIndex(_q,_c,MaxBW)].m = 0;
+                    tile[calIndex(_q,_c,MaxBW)].m = 0;
                 }
                 else
                 {
-                    rt[calIndex(_q,_c,MaxBW)].m = max2(max3(rt[calDiag(_q,_c,MaxBW)].x, rt[calDiag(_q,_c,MaxBW)].y, rt[calDiag(_q,_c,MaxBW)].m) + BLOSUM62[chq * 26 + chc], 0);
+                    tile[calIndex(_q,_c,MaxBW)].m = max2(max3(tile[calDiag(_q,_c,MaxBW)].x, tile[calDiag(_q,_c,MaxBW)].y, tile[calDiag(_q,_c,MaxBW)].m) + BLOSUM62[chq * 26 + chc], 0);
                 }
 
-                score = max3(rt[calIndex(_q,_c,MaxBW)].x, rt[calIndex(_q,_c,MaxBW)].y, rt[calIndex(_q,_c,MaxBW)].m);
+                score = max3(tile[calIndex(_q,_c,MaxBW)].x, tile[calIndex(_q,_c,MaxBW)].y, tile[calIndex(_q,_c,MaxBW)].m);
                 
-                // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
-                // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == rt[_q * width + _c].x)*TOP + (score == rt[_q * width + _c].y)*LEFT + (rt[_c * height + _q + q_offset].m)*DIAG; 
+                // printf("(query = %target,c = %c) BLOSUM62 = %d tile[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], tile[_q * width + _c].s);
+                // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == tile[_q * width + _c].x)*TOP + (score == tile[_q * width + _c].y)*LEFT + (tile[_c * height + _q + q_offset].m)*DIAG; 
             
                 rd[calIndex(_c, _q+q_offset,height) * BatchSize + idx] = (score?( \
-                    (score == rt[calIndex(_q,_c,MaxBW)].m) ? DIAG : \
-                    ((score == rt[calIndex(_q,_c,MaxBW)].y) ? LEFT :TOP )):0);
+                    (score == tile[calIndex(_q,_c,MaxBW)].m) ? DIAG : \
+                    ((score == tile[calIndex(_q,_c,MaxBW)].y) ? LEFT :TOP )):0);
                 
                 if (Score < score)
                 {
@@ -401,24 +400,24 @@ __global__ void banded_sw_kernel(
                 // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
             }
         }
-        memcpy(rt,rt + (t_height - 1) * MaxBW ,MaxBW * sizeof(record));
+        memcpy(tile,tile + (t_height - 1) * MaxBW ,MaxBW * sizeof(record));
         // Hit when target is not long enough, there are some cells should be zero
-        memset(rt + MaxBW, 0, (t_height - 1) * MaxBW * sizeof(record));
+        memset(tile + MaxBW, 0, (t_height - 1) * MaxBW * sizeof(record));
 
     }
 
-    score_d[idx] = Score;
+    max_score[idx] = Score;
     // res[idx].score = Score;
     assert(Score != 0);
 
     size_t cur_q= max_q;
     size_t cur_c = max_c;
 
-    q_end_d[idx] = cur_q + q_idx;
-    s_end_d[idx] = c_begin + cur_c + cur_q;
+    q_end_idx[idx] = cur_q + q_idx;
+    s_end_idx[idx] = c_begin + cur_c + cur_q;
 
     // int cnt_q = 0, cnt_c = 0;
-    int cigar_len = 0;
+    int cigar_cur_len = 0;
     while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx])
     {
         int d = rd[BatchSize * calIndex(cur_c,cur_q,height) + idx];
@@ -439,14 +438,14 @@ __global__ void banded_sw_kernel(
             cur_c += (d == TOP); // Increment cur_c if TOP (01b)
             cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
         }
-        (cigar_cnt_d + idx * MaxAlignLen)[cigar_len] = cur_cigar_cnt;
-        (cigar_op_d + idx * MaxAlignLen)[cigar_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+        (cigar_cnt + idx * MaxAlignLen)[cigar_cur_len] = cur_cigar_cnt;
+        (cigar_op + idx * MaxAlignLen)[cigar_cur_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
     }
 
     // free(rt);
     // printf("@@ cigar_len %d %d\n", idx,cigar_len);
-    assert(cigar_len > 0);
-    cigar_len_d[idx] = cigar_len;
+    assert(cigar_cur_len > 0);
+    cigar_len[idx] = cigar_cur_len;
 }
 
 void handle_results(cudaEvent_t &stream, const char *query, const char *subj, Task *task_host, uint32_t *num_task, QueryGroup &q_group, size_t s_length, int stream_id, vector<SWResult> &res, SWTasks &sw_task, ThreadPool *pool, vector<future<int>> &rs)
@@ -760,7 +759,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         // cout << "Prepare mem and data Time: " << timeuse(t_start, t_end) << endl;
 
         gettimeofday(&t_start, NULL);
-        // nvtxRangePush("MyProfileRegion");
+        nvtxRangePush("MyProfileRegion");
         for (int g = g_begin; g < g_begin + n_groups; g++)
         {
             int g_idx = g - g_begin;
@@ -909,7 +908,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         }
         CUDA_CALL(cudaStreamSynchronize(streams));
         // CUDA_CALL(cudaDeviceSynchronize());
-        // nvtxRangePop();
+        nvtxRangePop();
         gettimeofday(&t_end, NULL);
         time_prof.gpu_time += timeuse(t_start, t_end);
         group_time += timeuse(t_start, t_end);
