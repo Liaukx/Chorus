@@ -629,3 +629,152 @@ void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* ciga
     generate_report(idx, begin, res_s, score, task, query, target);
     assert(res_s.size());
 }
+
+
+
+void banded_sw_cpu_kernel(
+                int num_task,
+                uint32_t* q_lens, uint32_t* q_idxs, Task* task,
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *direct_matrix, record* tile_matrix,int band_width,
+                const int* BLOSUM62){
+#pragma omp parallel for
+    for(int idx = 0; idx < num_task; ++ idx){
+        int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
+        memset(rd,0,sizeof(int) *  (MaxQueryLen+1) * MaxBW);
+        memset(tile,0,sizeof(record) *  MaxBW * (TILE_SIZE + 1));
+        size_t query_len = q_lens[task[idx].q_id];
+        assert( query_len < MaxQueryLen);
+
+        size_t q_idx  = q_idxs[task[idx].q_id];
+        size_t diag  = task[idx].key;
+
+        int64_t c_begin = (int64_t)diag - band_width - query_len + 2;
+        // size_t c_end = diag + band_width;
+
+        size_t width = 2 * band_width + 1;
+        size_t height = MaxQueryLen + 1;
+        assert(width < MaxBW);
+
+        //init:
+        max_score[idx] = 0;
+
+        size_t t_height = TILE_SIZE + 1;
+
+        // record *rt = (record *)malloc(width * t_height * sizeof(record));
+        // memset(rt, 0, width * t_height * sizeof(record));
+
+        size_t max_q = 0;
+        size_t max_c = 0;
+        int score = 0, Score = 0;
+        // cal maxScore and it's position
+        for (size_t it = 0; it * TILE_SIZE < query_len; it++) {
+            
+            size_t q_offset = it * TILE_SIZE;
+
+            for(size_t _q = 0; _q < t_height-1 && q_offset + _q < query_len; ++_q){
+                for(size_t _c = 0; _c < width-2; ++_c){
+                    
+                    if(c_begin + _c+ q_offset + _q < 0) continue;
+                    if(c_begin + _c+ q_offset + _q >= target_len) break;
+
+                    char chq = query[q_idx + q_offset + _q];
+                    char chc = get_char(target, c_begin + q_offset + _c + _q);
+                    
+                    if (chq == END_SIGNAL || chc == END_SIGNAL)
+                    {
+                        continue;
+                    }
+                    //rt(_q,_c) -> (_q+1) * width + _c + 1
+                    // logical m(_q,_c).x = max(m(_q-1,_c).x + SCORE_GAP_EXT, m(_q-1,_c).m +SCORE_GAP, 0 );
+                    // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
+                    // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
+                    
+                    tile[calIndex(_q,_c,MaxBW)].x = max3(tile[calTop(_q,_c,MaxBW)].x + SCORE_GAP_EXT,  tile[calTop(_q,_c,MaxBW)].m + SCORE_GAP, 0);
+                    tile[calIndex(_q,_c,MaxBW)].y = max3(tile[calLeft(_q,_c,MaxBW)].y + SCORE_GAP_EXT, tile[calLeft(_q,_c,MaxBW)].m + SCORE_GAP, 0);
+
+                    if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                    {
+                        // illegal word
+                        tile[calIndex(_q,_c,MaxBW)].m = 0;
+                    }
+                    else
+                    {
+                        tile[calIndex(_q,_c,MaxBW)].m = max2(max3(tile[calDiag(_q,_c,MaxBW)].x, tile[calDiag(_q,_c,MaxBW)].y, tile[calDiag(_q,_c,MaxBW)].m) + BLOSUM62[chq * 26 + chc], 0);
+                    }
+
+                    score = max3(tile[calIndex(_q,_c,MaxBW)].x, tile[calIndex(_q,_c,MaxBW)].y, tile[calIndex(_q,_c,MaxBW)].m);
+                    
+                    // printf("(query = %target,c = %c) BLOSUM62 = %d tile[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], tile[_q * width + _c].s);
+                    // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == tile[_q * width + _c].x)*TOP + (score == tile[_q * width + _c].y)*LEFT + (tile[_c * height + _q + q_offset].m)*DIAG; 
+                    // if(score)
+                    //     rd[calIndex(_c, _q+q_offset, height)] = \
+                    //         (score == rt[calIndex(_q,_c,width)].m) ? DIAG : \
+                    //         ((score == rt[calIndex(_q,_c,width)].y) ? LEFT :TOP );
+                        
+                    rd[calIndex(_c, _q+q_offset,height)] = (score?( \
+                        (score == tile[calIndex(_q,_c,MaxBW)].m) ? DIAG : \
+                        ((score == tile[calIndex(_q,_c,MaxBW)].y) ? LEFT :TOP )):0);
+                    
+                    if (Score < score)
+                    {
+                        Score = score;
+                        max_c = _c;
+                        max_q = _q + q_offset;
+                    }
+                    // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
+                }
+            }
+            memcpy(tile,tile + (t_height - 1) * MaxBW ,MaxBW * sizeof(record));
+            // Hit when target is not long enough, there are some cells should be zero
+            memset(tile + MaxBW, 0, (t_height - 1) * MaxBW * sizeof(record));
+
+        }
+
+        max_score[idx] = Score;
+        // res[idx].score = Score;
+        assert(Score != 0 && Score < 1e8);
+
+        size_t cur_q= max_q;
+        size_t cur_c = max_c;
+
+        q_end_idx[idx] = cur_q + q_idx;
+        s_end_idx[idx] = c_begin + cur_c + cur_q;
+
+        // int cnt_q = 0, cnt_c = 0;
+        int cigar_cur_len = 0;
+        while (rd[calIndex(cur_c,cur_q,height)])
+        {
+            int d = rd[calIndex(cur_c,cur_q,height)];
+            // size_t res_q = (d&0x01) ? (cur_q + q_idx) : (size_t)-1;
+            // size_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : (size_t)-1;
+            
+            // q_res_d[idx* MaxAlignLen + (cnt_q)] = (res_q);
+            // s_res_d[idx* MaxAlignLen + (cnt_c)] = (res_c);
+            int cur_cigar_cnt = 0;
+            while (rd[calIndex(cur_c,cur_q,height)] && rd[calIndex(cur_c,cur_q,height)]==d){
+                cur_cigar_cnt ++;
+                
+                //TOP 01b, left 10b, diag 11b
+                //DIAG : cur_q -= 1
+                //TOP : cur_q -= 1, cur_c += 1;
+                //LEFT : cur_c -= 1
+                cur_q -= (d == DIAG || d == TOP);
+                cur_c += (d == TOP); // Increment cur_c if TOP (01b)
+                cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+            }
+            (cigar_cnt + idx * MaxAlignLen)[cigar_cur_len] = cur_cigar_cnt;
+            (cigar_op + idx * MaxAlignLen)[cigar_cur_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+        }
+
+        // free(rt);
+        if(cigar_cur_len >= MaxAlignLen)
+            printf("@@ cigar_len %d %d\n", idx,cigar_cur_len);
+        assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
+        cigar_len[idx] = cigar_cur_len;
+    }
+}

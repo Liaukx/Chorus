@@ -22,7 +22,7 @@ using namespace std;
 #define DIAG 3
 
 
-#define MaxAlignLen 1000
+#define MaxAlignLen 3000
 #define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
@@ -155,3 +155,13 @@ void cpu_kernel(SWResult *res,
                 const int band_width);
 
 void gasal_run(SWTasks tasks, vector<SWResult> res[][NUM_STREAM],const char* q_dev, const char* s_dev, int num_g, int span);
+
+void banded_sw_cpu_kernel(
+                int num_task,
+                uint32_t* q_lens, uint32_t* q_idxs, Task* task,
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *direct_matrix, record* tile_matrix,int band_width,
+                const int* BLOSUM62);

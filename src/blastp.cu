@@ -144,158 +144,6 @@ __global__ void filter_kernel(KeyValue *ht, Task *tasks, uint32_t *num_task, uin
     // size_t each_length = (total_length-1)/b + 1;
 }
 
-
-__global__ void multibatch_banded_sw_kernel(uint32_t* totalTasks,uint32_t* q_lens, uint32_t* q_idxs, Task* task,
-                const char* q, const char* c, size_t c_len,
-                int * score_d,
-                // int* q_len_d,int* s_len_d,
-                size_t* q_end_d, size_t* s_end_d,
-                char* cigar_op_d, int* cigar_cnt_d,int* cigar_len_d,
-                int *rd, record* rt_d,int band_width,
-                const int* BLOSUM62_d)
-{
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-    
-    const int* BLOSUM62 = BLOSUM62_d;
-    record* rt = rt_d + idx * MaxBW * (TILE_SIZE + 1);
-    
-    for (size_t global_idx = idx; global_idx < (*totalTasks); global_idx += BatchSize) {
-        
-        size_t n = q_lens[task[global_idx].q_id];
-        if(n > MaxQueryLen) printf("## Query Len %ld\n", n);
-        assert( n < MaxQueryLen);
-    
-        size_t q_idx  = q_idxs[task[global_idx].q_id];
-        size_t diag  = task[global_idx].key;
-        
-        int64_t c_begin = (int64_t)diag - band_width - n + 2;
-        size_t c_end = diag + band_width;
-       
-        // size_t width = 2 * band_width + 1;
-        size_t height = MaxQueryLen + 1;
-        // assert(width < MaxBW);
-        
-        size_t t_height = TILE_SIZE + 1;
-        
-        // record *rt = (record *)malloc(width * t_height * sizeof(record));
-        // memset(rt, 0, width * t_height * sizeof(record));
-
-        size_t max_q = 0;
-        size_t max_c = 0;
-        int score = 0, Score = 0;
-        // cal maxScore and it's position
-        for (size_t it = 0; it * TILE_SIZE < n; it++) {
-            
-            size_t q_offset = it * TILE_SIZE;
-
-            for(size_t _q = 0; _q < t_height-1 && q_offset + _q < n; ++_q){
-                for(size_t _c = 0; _c < 2 * band_width - 1; ++_c){
-                    
-                    if(c_begin + _c+ q_offset + _q < 0) continue;
-                    if(c_begin + _c+ q_offset + _q >= c_len) break;
-
-                    char chq = q[q_idx + q_offset + _q];
-                    char chc = get_char_d(c, c_begin + q_offset + _c + _q);
-                    
-                    if (chq == END_SIGNAL || chc == END_SIGNAL)
-                    {
-                        continue;
-                    }
-                    //rt(_q,_c) -> (_q+1) * width + _c + 1
-                    // logical m(_q,_c).x = max(m(_q-1,_c).x + SCORE_GAP_EXT, m(_q-1,_c).m +SCORE_GAP, 0 );
-                    // logical m(_q,_c).y = max(m(_q,_c-1).y + SCORE_GAP_EXT, m(_q,_c-1).m +SCORE_GAP, 0 );
-                    // logical m(_q,_c).m = max(m(_q-1,_c-1).y,m(_q-1,_c-1).x,m(_q-1,_c-1).m, 0 );
-                    
-                    rt[calIndex(_q,_c,MaxBW)].x = max3(rt[calTop(_q,_c,MaxBW)].x + SCORE_GAP_EXT,  rt[calTop(_q,_c,MaxBW)].m + SCORE_GAP, 0);
-                    rt[calIndex(_q,_c,MaxBW)].y = max3(rt[calLeft(_q,_c,MaxBW)].y + SCORE_GAP_EXT, rt[calLeft(_q,_c,MaxBW)].m + SCORE_GAP, 0);
-
-                    if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
-                    {
-                        // illegal word
-                        rt[calIndex(_q,_c,MaxBW)].m = 0;
-                    }
-                    else
-                    {
-                        rt[calIndex(_q,_c,MaxBW)].m = max2(max3(rt[calDiag(_q,_c,MaxBW)].x, rt[calDiag(_q,_c,MaxBW)].y, rt[calDiag(_q,_c,MaxBW)].m) + BLOSUM62[chq * 26 + chc], 0);
-                    }
-
-                    score = max3(rt[calIndex(_q,_c,MaxBW)].x, rt[calIndex(_q,_c,MaxBW)].y, rt[calIndex(_q,_c,MaxBW)].m);
-                    
-                    // printf("(q = %c,c = %c) BLOSUM62 = %d rt[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], rt[_q * width + _c].s);
-                    // (rd + global_idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == rt[_q * width + _c].x)*TOP + (score == rt[_q * width + _c].y)*LEFT + (rt[_c * height + _q + q_offset].m)*DIAG; 
-                    
-                    rd[calIndex(_c, _q+q_offset,height) * BatchSize + idx] = (score?( \
-                        (score == rt[calIndex(_q,_c,MaxBW)].m) ? DIAG : \
-                        ((score == rt[calIndex(_q,_c,MaxBW)].y) ? LEFT :TOP )):0);
-                    
-                    if (Score < score)
-                    {
-                        Score = score;
-                        max_c = _c;
-                        max_q = _q + q_offset;
-                    }
-                    // printf("(q = %c,c = %c) score = %d maxScore = %d direction = %d\n", chq+65,chc+65,r[_q*width + _c].s,r[max_c * height + max_q].s,r[_q * width + _c].d);
-                }
-            }
-            memcpy(rt,rt + (t_height - 1) * MaxBW ,MaxBW * sizeof(record));
-            // Hit when target is not long enough, there are some cells should be zero
-            memset(rt + MaxBW, 0, (t_height - 1) * MaxBW * sizeof(record));
-
-        }
-
-        score_d[global_idx] = Score;
-        // res[global_idx].score = Score;
-        if(Score == 0){
-            printf("## it = %d\n",global_idx);
-        }
-        assert(Score != 0);
-
-        size_t cur_q= max_q;
-        size_t cur_c = max_c;
-
-        q_end_d[global_idx] = cur_q + q_idx;
-        s_end_d[global_idx] = c_begin + cur_c + cur_q;
-
-        int cnt_q = 0, cnt_c = 0;
-        int cigar_len = 0;
-        assert(rd[BatchSize * calIndex(cur_c,cur_q,height) + idx] != 0);
-        while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx])
-        {
-            int d = rd[BatchSize * calIndex(cur_c,cur_q,height) + idx];
-            // size_t res_q = (d&0x01) ? (cur_q + q_idx) : (size_t)-1;
-            // size_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : (size_t)-1;
-            
-            // q_res_d[global_idx* MaxAlignLen + (cnt_q)] = (res_q);
-            // s_res_d[global_idx* MaxAlignLen + (cnt_c)] = (res_c);
-            int cur_cigar_cnt = 0;
-            while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx] && rd[BatchSize * calIndex(cur_c,cur_q,height) + idx]==d){
-                cur_cigar_cnt ++;
-                
-                //TOP 01b, left 10b, diag 11b
-                //DIAG : cur_q -= 1
-                //TOP : cur_q -= 1, cur_c += 1;
-                //LEFT : cur_c -= 1
-                cur_q -= (d == DIAG || d == TOP);
-                cur_c += (d == TOP); // Increment cur_c if TOP (01b)
-                cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
-            }
-            (cigar_cnt_d + global_idx * MaxAlignLen)[cigar_len] = cur_cigar_cnt;
-            (cigar_op_d + global_idx * MaxAlignLen)[cigar_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
-        }
-
-        // free(rt);
-        assert(cigar_len > 0);
-        cigar_len_d[global_idx] = cigar_len;
-        
-        memset(rt,0, MaxBW * (TILE_SIZE + 1) * sizeof(record));
-        for(size_t i = 0; i < MaxBW; ++ i){
-            for(size_t j = 0; j < MaxQueryLen+1; ++ j){
-                rd[BatchSize * (i * (MaxQueryLen+1) + j) + idx] = 0;
-            }
-        }
-
-    }
-}
 __global__ void banded_sw_kernel(
                 int NumTasks,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
@@ -515,6 +363,26 @@ void call_results(cudaEvent_t& event, \
     }
     mu2.unlock();
 }
+void call_results_cpu(const char* query, const char* subj,
+                Task* task_host, int num_task,
+                int* cigar_len_h, char* cigar_op_h, int* cigar_cnt_h,
+                size_t* q_end_h, size_t* s_end_h,
+                int* score_h,
+                std::vector<SWResult>& res_s, int begin,
+                ThreadPool* pool, std::vector<std::future<int>>& rs) {
+   
+    mu2.lock();
+    for (size_t i = 0; i < num_task; ++i) {
+        rs.emplace_back(pool->enqueue([&, i] {
+            
+            cigar_to_index_and_report(i, begin, cigar_len_h, cigar_op_h, cigar_cnt_h,
+                        q_end_h, s_end_h, res_s, score_h, task_host, query, subj);
+            
+            return static_cast<int>(i);
+        }));
+    }
+    mu2.unlock();
+}
 __global__ void initializeArray_rd(int* array, int value, size_t numElements) {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements) {
@@ -650,17 +518,27 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     int blocks_rd = (direct_matrixSize * BatchSize + threadsPerBlock - 1) / threadsPerBlock;
     int blocks_rt = (MaxBW * (TILE_SIZE + 1) * BatchSize + threadsPerBlock - 1) / threadsPerBlock;
     
-    int* rd[n_groups][NUM_STREAM][MaxNumBatch];   // direct_matrixSize * BatchSize * sizeof(int)
-    record* rt[n_groups][NUM_STREAM][MaxNumBatch];
+    int* direction_matrix[n_groups][NUM_STREAM][MaxNumBatch];   // direct_matrixSize * BatchSize * sizeof(int)
+    record* tiled_direction_matrix[n_groups][NUM_STREAM][MaxNumBatch];
     int* BLOSUM62_d;
-    int* score_d[n_groups][NUM_STREAM][MaxNumBatch], *score_h[n_groups][NUM_STREAM][MaxNumBatch];
+    int* score_d[n_groups][NUM_STREAM][MaxNumBatch], *score_h[n_groups][NUM_STREAM][MaxNumBatch], *score;
     
-    size_t* q_end_d[n_groups][NUM_STREAM][MaxNumBatch], *q_end_h[n_groups][NUM_STREAM][MaxNumBatch];
-    size_t* s_end_d[n_groups][NUM_STREAM][MaxNumBatch], *s_end_h[n_groups][NUM_STREAM][MaxNumBatch];
-    char* cigar_op_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_op_h[n_groups][NUM_STREAM][MaxNumBatch];
-    int *cigar_cnt_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_cnt_h[n_groups][NUM_STREAM][MaxNumBatch];
-    int* cigar_len_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_len_h[n_groups][NUM_STREAM][MaxNumBatch];
+    size_t* q_end_d[n_groups][NUM_STREAM][MaxNumBatch], *q_end_h[n_groups][NUM_STREAM][MaxNumBatch], *q_end;
+    size_t* s_end_d[n_groups][NUM_STREAM][MaxNumBatch], *s_end_h[n_groups][NUM_STREAM][MaxNumBatch], *s_end;
+    char* cigar_op_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_op_h[n_groups][NUM_STREAM][MaxNumBatch], *cigar_op;
+    int *cigar_cnt_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_cnt_h[n_groups][NUM_STREAM][MaxNumBatch], *cigar_cnt;
+    int* cigar_len_d[n_groups][NUM_STREAM][MaxNumBatch], *cigar_len_h[n_groups][NUM_STREAM][MaxNumBatch], *cigar_len;
 
+    score = (int*)malloc(sizeof(int) * BatchSize);
+
+    q_end = (size_t*)malloc(sizeof(size_t) * BatchSize);
+    s_end = (size_t*)malloc(sizeof(size_t) * BatchSize);
+    
+    cigar_cnt = (int*)malloc(sizeof(int) * MaxAlignLen * BatchSize);
+    cigar_len = (int*)malloc(sizeof(int)* BatchSize);
+    cigar_op = (char*)malloc(sizeof(char) * MaxAlignLen * BatchSize);
+    int* rd = (int*)malloc(direct_matrixSize * sizeof(int) * BatchSize);   // direct_matrixSize * BatchSize * sizeof(int)
+    record* rt = (record*)malloc(MaxBW * (TILE_SIZE + 1) * sizeof(record) * BatchSize); 
 
     for(int g = 0; g < n_groups; ++ g){
 
@@ -822,12 +700,30 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                         if(num_task < (BatchSize >> 1)){
                             struct timeval cpu_start, cpu_end;
                             gettimeofday(&cpu_start, NULL);
-#pragma omp parallel for
-                            for(size_t i = 0; i < num_task; i++){   
-                                cpu_kernel(&res_s[g][s][i + it],query,subj[s],s_length[s],q_groups[g].offset[task_host[g_idx][s][i + it].q_id],q_groups[g].length[task_host[g_idx][s][i + it].q_id],task_host[g_idx][s][i + it].key,band_width);
-                                res_s[g][s][i + it].num_q = task_host[g_idx][s][i + it].q_id;
-                                // generate_report(&res_s[g][s][i + it],query, subj[s]);
-                            }
+                            int g = g_begin + g_idx;
+// #pragma omp parallel for
+                            banded_sw_cpu_kernel(num_task,
+                                q_groups[g].length, q_groups[g].offset, task_host[g_idx][s] + it,
+                                query,subj[s], s_length[s],
+                                score,
+                                q_end, s_end,
+                                cigar_op, cigar_cnt, cigar_len,
+                                rd, rt, band_width,
+                                BLOSUM62);
+                            
+                            // for(int i = 0; i < num_task; i++){
+                            //     cigar_to_index_and_report(i, it, cigar_len, cigar_op, cigar_cnt,
+                            //                         q_end, s_end, res_s[g][s], score, task_host[g_idx][s]+it, query, subj[s]);
+                                
+                            // }
+                            report_threads[g_idx][s][cur] = thread(call_results_cpu,
+                                                query, subj[s],
+                                                task_host[g_idx][s]+it, num_task,
+                                                cigar_len, cigar_op, cigar_cnt,
+                                                q_end, s_end,
+                                                score,
+                                                ref(res_s[g][s]), it,
+                                                pool, ref(rs_report[g_idx][s][cur]));
                             gettimeofday(&cpu_end, NULL);
                             // cout << "cpu remaind: " << timeuse(cpu_start, cpu_end) << endl;
                             break;
@@ -836,12 +732,12 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                     // num_task_vec.push_back(num_task);
                     
                     
-                    CUDA_CALL(cudaMallocAsync((void**)&rd[g_idx][s][cur], direct_matrixSize * BatchSize * sizeof(int), streams));
-                    CUDA_CALL(cudaMallocAsync((void**)&rt[g_idx][s][cur], MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record), streams));
-                    // CUDA_CALL(cudaMemsetAsync(rd[g_idx][s][cur], 0, direct_matrixSize * BatchSize * sizeof(int),  streams));
-                    // CUDA_CALL(cudaMemsetAsync(rt[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record),  streams));
-                    initializeArray_rd<<<blocks_rd, threadsPerBlock, 0, streams>>>(rd[g_idx][s][cur], 0, direct_matrixSize * BatchSize);
-                    initializeArray_rt<<<blocks_rt, threadsPerBlock, 0, streams>>>(rt[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize);
+                    CUDA_CALL(cudaMallocAsync((void**)&direction_matrix[g_idx][s][cur], direct_matrixSize * BatchSize * sizeof(int), streams));
+                    CUDA_CALL(cudaMallocAsync((void**)&tiled_direction_matrix[g_idx][s][cur], MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record), streams));
+                    // CUDA_CALL(cudaMemsetAsync(direction_matrix[g_idx][s][cur], 0, direct_matrixSize * BatchSize * sizeof(int),  streams));
+                    // CUDA_CALL(cudaMemsetAsync(tiled_direction_matrix[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record),  streams));
+                    initializeArray_rd<<<blocks_rd, threadsPerBlock, 0, streams>>>(direction_matrix[g_idx][s][cur], 0, direct_matrixSize * BatchSize);
+                    initializeArray_rt<<<blocks_rt, threadsPerBlock, 0, streams>>>(tiled_direction_matrix[g_idx][s][cur], 0, MaxBW * (TILE_SIZE + 1) * BatchSize);
                     
                     // CUDA_CALL(cudaMallocAsync((void**)&cigar_op_d[g_idx][s][cur], BatchSize * sizeof(char) * MaxAlignLen, streams));
                     // CUDA_CALL(cudaMallocAsync((void**)&cigar_cnt_d[g_idx][s][cur], BatchSize * sizeof(int) * MaxAlignLen, streams));
@@ -861,7 +757,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                                     score_d[g_idx][s][cur],
                                     q_end_d[g_idx][s][cur],s_end_d[g_idx][s][cur],
                                     cigar_op_d[g_idx][s][cur],cigar_cnt_d[g_idx][s][cur],cigar_len_d[g_idx][s][cur],
-                                    rd[g_idx][s][cur],rt[g_idx][s][cur],band_width,
+                                    direction_matrix[g_idx][s][cur],tiled_direction_matrix[g_idx][s][cur],band_width,
                                     BLOSUM62_d);
                     CUDA_CALL(cudaEventRecord(kernels_done[g_idx][s][cur], streams));                
                     CUDA_CALL(cudaStreamWaitEvent(copy_streams[cur], kernels_done[g_idx][s][cur], 0));
@@ -876,13 +772,16 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                     CUDA_CALL(cudaMemcpyAsync(cigar_len_h[g_idx][s][cur], cigar_len_d[g_idx][s][cur], BatchSize * sizeof(int), cudaMemcpyDeviceToHost,copy_streams[cur]));
                     
                     CUDA_CALL(cudaEventRecord(copies_done[g_idx][s][cur], copy_streams[cur]));
-                    CUDA_CALL(cudaFreeAsync(rd[g_idx][s][cur], streams));
-                    CUDA_CALL(cudaFreeAsync(rt[g_idx][s][cur], streams));
+                    CUDA_CALL(cudaFreeAsync(direction_matrix[g_idx][s][cur], streams));
+                    CUDA_CALL(cudaFreeAsync(tiled_direction_matrix[g_idx][s][cur], streams));
                     // CUDA_CALL(cudaFreeAsync(score_d[g_idx][s][cur], streams));
                     // CUDA_CALL(cudaEventSynchronize((copies_done[g_idx][s][cur])));
                     // for(int i = 0; i < num_task_vec[cur]; ++ i){
                     //     assert(cigar_len_h[i] > 0);
                     // }
+
+                    // CUDA_CALL(cudaEventSynchronize(copies_done[g_idx][s][cur]));
+                    // CUDA_CALL(cudaEventDestroy(copies_done[g_idx][s][cur]));
                     report_threads[g_idx][s][cur] = thread(call_results,
                                                     ref(copies_done[g_idx][s][cur]),
                                                     ref(streams),
@@ -999,6 +898,15 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     //     n_groups = MAX_GROUPS_PER_ROUND;
     // }
 #ifdef USE_GPU_DIFFUSE
+    free(score); 
+    
+    free(s_end); 
+    free(q_end); 
+    
+    free(cigar_op); 
+    free(cigar_cnt); 
+    free(rd); 
+    free(rt); 
     for(int g = 0; g < n_groups; ++ g){
 
         for(int s = 0; s < NUM_STREAM; ++ s){
