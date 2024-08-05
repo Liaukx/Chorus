@@ -168,16 +168,6 @@ __global__ void banded_sw_kernel(
     // size_t c_end = diag + band_width;
     
     record* tile = rt + idx * MaxBW * (TILE_SIZE + 1);
-    
-    // __shared__ int shared_BLOSUM62[26 * 26];
-    
-    // for(size_t i = 0; i < MaxBW; ++ i){
-    //     for(size_t j = 0; j < MaxQueryLen+1; ++ j){
-    //         rd[BatchSize * (i * (MaxQueryLen+1) + j) + idx] = 0;
-    //     }
-    // }
-    // __syncthreads(); // Wait for the copy to compl .ete
-
 
     size_t width = 2 * band_width + 1;
     size_t height = MaxQueryLen + 1;
@@ -188,9 +178,6 @@ __global__ void banded_sw_kernel(
     
     size_t t_height = TILE_SIZE + 1;
     
-    // record *rt = (record *)malloc(width * t_height * sizeof(record));
-    // memset(rt, 0, width * t_height * sizeof(record));
-
     size_t max_q = 0;
     size_t max_c = 0;
     int score = 0, Score = 0;
@@ -292,7 +279,7 @@ __global__ void banded_sw_kernel(
 
     // free(rt);
     // printf("@@ cigar_len %d %d\n", idx,cigar_len);
-    assert(cigar_cur_len > 0);
+    assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
     cigar_len[idx] = cigar_cur_len;
 }
 
@@ -710,6 +697,20 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                                 cigar_op, cigar_cnt, cigar_len,
                                 rd, rt, band_width,
                                 BLOSUM62);
+                            // int* score_tmp = (int*)malloc(sizeof(int) * BatchSize);
+                            // banded_sw_cpu_kernel_api(num_task,
+                            //     q_groups[g].length, q_groups[g].offset, task_host[g_idx][s] + it,
+                            //     query,subj[s], s_length[s],
+                            //     score_tmp,
+                            //     q_end, s_end,
+                            //     cigar_op, cigar_cnt, cigar_len,
+                            //     rd, rt, band_width,
+                            //     BLOSUM62);
+                            // for(int i = 0; i < num_task; ++ i){
+                            //     printf("%d|%d %d\n",i, score_tmp[i],score[i]);
+                            //     assert(score_tmp[i] == score[i]);
+                            // }
+                            // free(score_tmp);
                             
                             // for(int i = 0; i < num_task; i++){
                             //     cigar_to_index_and_report(i, it, cigar_len, cigar_op, cigar_cnt,

@@ -641,7 +641,7 @@ void banded_sw_cpu_kernel(
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
                 int *direct_matrix, record* tile_matrix,int band_width,
                 const int* BLOSUM62){
-#pragma omp parallel for
+// #pragma omp parallel for
     for(int idx = 0; idx < num_task; ++ idx){
         int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
         record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
@@ -773,6 +773,194 @@ void banded_sw_cpu_kernel(
 
         // free(rt);
         if(cigar_cur_len >= MaxAlignLen)
+            printf("@@ cigar_len %d %d\n", idx,cigar_cur_len);
+        assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
+        cigar_len[idx] = cigar_cur_len;
+    }
+}
+
+void banded_sw_cpu_kernel_api(
+                int num_task,
+                uint32_t* q_lens, uint32_t* q_idxs, Task* task,
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *direct_matrix, record* tile_matrix,int band_width,
+                const int* BLOSUM62){
+// #pragma omp parallel for
+    for(int idx = 0; idx < num_task; ++ idx){
+        int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
+        memset(rd,0,sizeof(int) *  (MaxQueryLen+1) * MaxBW);
+        memset(tile,0,sizeof(record) *  MaxBW *(TILE_SIZE + 1));
+        size_t query_len = q_lens[task[idx].q_id];
+        assert( query_len < MaxQueryLen);
+
+        size_t q_idx  = q_idxs[task[idx].q_id];
+        size_t diag  = task[idx].key;
+
+        int64_t c_begin = (int64_t)diag - band_width - query_len + 2;
+        // size_t c_end = diag + band_width;
+ 
+        size_t width = 2 * band_width + 1;
+        size_t height = MaxQueryLen + 1;
+        assert(width < MaxBW);
+
+        //init:
+        max_score[idx] = 0;
+
+        // size_t t_height = TILE_SIZE + 1;
+
+        // record *rt = (record *)malloc(width * t_height * sizeof(record));
+        // memset(rt, 0, width * t_height * sizeof(record));
+
+        size_t max_q = 0;
+        size_t max_c = 0;
+        int score = 0, Score = 0;
+        // cal maxScore and it's position
+        size_t query_begin = q_idx;
+        int64_t target_begin = c_begin;
+        size_t logic_target_len = 2 * band_width + query_len - 2;
+        // tile 2 * width
+        // record *tile = (record*) malloc(2 * MaxBW * sizeof(record));
+        // memset(tile, 0, 2 * MaxBW * sizeof(record));
+        
+        for(int64_t _q = 0; _q < query_len; ++ _q){
+            size_t current = _q % 2;
+            size_t previous = 1 - current;
+            // memset(tile + previous * MaxBW,0,sizeof(record) *  MaxBW);
+            for(int64_t _c = 0; _c < logic_target_len; ++ _c){
+                
+                if(_c < _q) continue;
+                if(_c > _q + 2*band_width -2) break;
+
+                int64_t ch_query_pos = query_begin + _q;
+                int64_t ch_target_pos = target_begin + _c;
+                
+                // TODO Judge:
+                // 1. ch_target_pos < 0 continue;
+                // 2. ch_target_pos > total_target_len break;
+                // 3. _c 是否属于 [_q, _q + 2 * bw -1) 不属于 break;
+                // _c < _q ||  _c > _q + 2*band_width -2 : 不在tile内
+                // ch_target_pos < 0 && _c >= _q tile 内失效
+                if(ch_target_pos < 0 ) {
+                    
+                    tile[calIndex2D(current, _c-_q, MaxBW)].x = 0;
+                    tile[calIndex2D(current, _c-_q, MaxBW)].y = 0;
+                    tile[calIndex2D(current, _c-_q, MaxBW)].m = 0;
+                    continue;
+                }
+                
+                if(ch_target_pos >= target_len ){
+                    for(int k = _c; k <=  _q + 2*band_width -2; ++ k){
+
+                        tile[calIndex2D(current, k-_q, MaxBW)].x = 0;
+                        tile[calIndex2D(current, k-_q, MaxBW)].y = 0;
+                        tile[calIndex2D(current, k-_q, MaxBW)].m = 0;
+                    }
+                    break;
+                }
+                
+                char chq = query[ch_query_pos];
+                char chc = get_char(target, ch_target_pos);
+                if (chq == END_SIGNAL || chc == END_SIGNAL)
+                {
+                    continue;
+                }
+                
+                // 获取依赖关系
+                if(_q > 0 && _c  < _q + 2 * band_width -2){
+
+                    tile[calIndex2D(current, _c-_q, MaxBW)].x = max3(tile[calIndex2D(previous,_c - _q+1,MaxBW)].x + SCORE_GAP_EXT,  tile[calIndex2D(previous,_c - _q+1,MaxBW)].m + SCORE_GAP, 0);
+                }
+                else{
+                    tile[calIndex2D(current, _c-_q, MaxBW)].x = 0;
+
+                }
+                
+                if(_c-1 >= _q && target_begin + _c - 1 >= 0 && _c-1 >= _q){
+
+                    tile[calIndex2D(current, _c-_q, MaxBW)].y = max3(tile[calIndex2D(current,_c - _q-1,MaxBW)].y + SCORE_GAP_EXT, tile[calIndex2D(current,_c - _q-1,MaxBW)].m + SCORE_GAP, 0);
+                }
+                else{
+
+                    tile[calIndex2D(current, _c-_q, MaxBW)].y = 0;
+                }
+                
+                
+                if (chq == ILLEGAL_WORD || chc == ILLEGAL_WORD)
+                {
+                   tile[calIndex2D(current, _c-_q, MaxBW)].m = 0;
+                }
+                else
+                {
+                    if(_q > 0 && target_begin + _c - 1 >= 0 && _c-1 >= _q){
+
+                        tile[calIndex2D(current, _c-_q, MaxBW)].m = max2(max3(tile[calIndex2D(previous,_c - _q,MaxBW)].x, tile[calIndex2D(previous,_c - _q,MaxBW)].y, tile[calIndex2D(previous,_c - _q,MaxBW)].m) + BLOSUM62[chq * 26 + chc], 0);
+                    }
+                    else{
+
+                        tile[calIndex2D(current, _c-_q, MaxBW)].m = max2(max3(0,0, 0)+ BLOSUM62[chq * 26 + chc], 0);
+                    } 
+                }
+
+                score = max3(tile[calIndex2D(current,_c - _q,MaxBW)].x, tile[calIndex2D(current,_c - _q,MaxBW)].y, tile[calIndex2D(current,_c - _q,MaxBW)].m);
+                        
+                
+                // cal score
+               rd[calIndex(_c - _q, _q,height)] = (score?( \
+                        (score == tile[calIndex2D(current,_c - _q,MaxBW)].m) ? DIAG : \
+                        ((score == tile[calIndex2D(current,_c - _q,MaxBW)].y) ? LEFT :TOP )):0);
+                    
+                if (Score < score)
+                {
+                    Score = score;
+                    max_c = _c;
+                    max_q = _q;
+                }
+            }
+        }
+        // free(tile);
+        max_score[idx] = Score;
+        // res[idx].score = Score;
+        assert(Score != 0 && Score < 1e8);
+
+        size_t cur_q= max_q;
+        size_t cur_c = max_c;
+
+        q_end_idx[idx] = max_q + query_begin;
+        s_end_idx[idx] = max_c + target_begin;
+
+        // int cnt_q = 0, cnt_c = 0;
+        int cigar_cur_len = 0;
+        assert(rd[calIndex(cur_c-cur_q,cur_q,height)] != 0);
+        while (rd[calIndex(cur_c-cur_q,cur_q,height)])
+        {
+            int d = rd[calIndex(cur_c-cur_q,cur_q,height)];
+            // size_t res_q = (d&0x01) ? (cur_q + q_idx) : (size_t)-1;
+            // size_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : (size_t)-1;
+            
+            // q_res_d[idx* MaxAlignLen + (cnt_q)] = (res_q);
+            // s_res_d[idx* MaxAlignLen + (cnt_c)] = (res_c);
+            int cur_cigar_cnt = 0;
+            while (rd[calIndex(cur_c-cur_q,cur_q,height)] && rd[calIndex(cur_c-cur_q,cur_q,height)]==d){
+                cur_cigar_cnt ++;
+                
+                //TOP 01b, left 10b, diag 11b
+                //DIAG : cur_q -= 1
+                //TOP : cur_q -= 1, cur_c += 1;
+                //LEFT : cur_c -= 1
+                cur_q -= (d == DIAG || d == TOP);
+                cur_c += (d == TOP); // Increment cur_c if TOP (01b)
+                cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+            }
+            (cigar_cnt + idx * MaxAlignLen)[cigar_cur_len] = cur_cigar_cnt;
+            (cigar_op + idx * MaxAlignLen)[cigar_cur_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+        }
+
+        // free(rt);
+        if(cigar_cur_len >= MaxAlignLen || cigar_cur_len <= 0)
             printf("@@ cigar_len %d %d\n", idx,cigar_cur_len);
         assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
         cigar_len[idx] = cigar_cur_len;

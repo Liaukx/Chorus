@@ -11,6 +11,7 @@ using namespace std;
 #define MASK5(v) (v & 0b11111)
 
 #define calIndex(i,j,w) ((i+1)*(w)+(j+1))
+#define calIndex2D(i,j,w) ((i)*(w)+(j))
 #define calIndex3D(i,j,k,X,Y,Z) ((i+1)*(Y)*(Z)+(j+1)*(Z) + (k))
 #define calTop(i,j,w) ((i)*(w)+(j+2))
 #define calLeft(i,j,w) ((i+1)*(w)+(j))
@@ -157,6 +158,16 @@ void cpu_kernel(SWResult *res,
 void gasal_run(SWTasks tasks, vector<SWResult> res[][NUM_STREAM],const char* q_dev, const char* s_dev, int num_g, int span);
 
 void banded_sw_cpu_kernel(
+                int num_task,
+                uint32_t* q_lens, uint32_t* q_idxs, Task* task,
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *direct_matrix, record* tile_matrix,int band_width,
+                const int* BLOSUM62);
+
+void banded_sw_cpu_kernel_api(
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
