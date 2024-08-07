@@ -27,8 +27,8 @@ using namespace std;
 #define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
-#define BatchSize 2048
-#define MaxNumBatch 20
+#define BatchSize 4096
+#define MaxNumBatch 10
 // mutex mu1;
 
 typedef struct

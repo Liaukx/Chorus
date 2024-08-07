@@ -641,7 +641,7 @@ void banded_sw_cpu_kernel(
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
                 int *direct_matrix, record* tile_matrix,int band_width,
                 const int* BLOSUM62){
-// #pragma omp parallel for
+#pragma omp parallel for 
     for(int idx = 0; idx < num_task; ++ idx){
         int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
         record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 

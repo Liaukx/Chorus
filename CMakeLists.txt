@@ -17,7 +17,7 @@ endif()
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     message(STATUS "DEBUG MODE")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O0 -lineinfo -g -G  -Xptxas=-v ")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O0 -lineinfo -g -G  -Xptxas=-v  -lnvidia-ml ")
 else()
     message(STATUS "RELEASE MODE")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
@@ -25,6 +25,7 @@ else()
 endif()
 
 find_package(OpenMP)
+find_library(NVML_LIBRARY nvidia-ml)
 
 message(STATUS "Use CPU local alignment")
 set(SOURCES_UTIL
@@ -60,6 +61,7 @@ target_compile_options (util
 
 add_executable(query src/main.cpp ${SOURCES_SEARCH})
 target_link_libraries(query util)
+target_link_libraries(query ${NVML_LIBRARY})
 
 add_executable(createDB src/createDB.cpp ${SOURCES_CUDATOOL})
 
