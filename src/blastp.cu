@@ -15,6 +15,7 @@ std::condition_variable sw_beg_cv;
 std::condition_variable sw_end_cv;
 atomic<bool> bw_finished ={0};
 atomic<bool> bw_begin= {0};
+atomic<bool> produce_end= {0};
 
 // vector<SWResult> res_s[MAX_GROUPS_PER_ROUND][NUM_STREAM];
 
@@ -416,8 +417,11 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue){
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
         sw_beg_cv.wait(queue_lock,[&]{return bw_begin.load();});
         queue_lock.unlock();
+        while(banded_sw_task_queue.empty() && !produce_end){
+            // sleep(1);
+        }
         
-        if(banded_sw_task_queue.empty() && bw_begin){
+        if(banded_sw_task_queue.empty() && produce_end){
             std::unique_lock<std::mutex> queue_lock(queue_mutex);
             sw_end_cv.notify_all();
             bw_finished = 1;
@@ -428,7 +432,7 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue){
         banded_sw_task cur =  banded_sw_task_queue.front();
         // printf("begin task\n");
         if(checkGPUUtilization() < 50 && cur.num_task > (BatchSize >> 1)  && banded_sw_task_queue.size() > 2){
-            printf("GPU Task\n");
+            // printf("GPU Task\n");
             gpu_cnt += 1;
             int* direction_matrix;
             record* tiled_direction_matrix;
@@ -467,7 +471,7 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue){
             
         }else{
             cpu_cnt += 1;
-            printf("CPU Task\n");
+            // printf("CPU Task\n");
             gettimeofday(&schedule_beg, NULL);
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
             banded_sw_cpu_kernel(cur.num_task,
@@ -659,7 +663,6 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     }
     gettimeofday(&t_end, NULL);
     time_prof.mem_time += timeuse(t_start, t_end);
-    printf("## Point 1\n");
 
     for (int g_begin = 0; g_begin < q_groups.size(); g_begin += MAX_GROUPS_PER_ROUND)
     {
@@ -671,9 +674,9 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         if (n_groups > MAX_GROUPS_PER_ROUND)
             n_groups = MAX_GROUPS_PER_ROUND;
 
-        const int num_consumer_threads = 1; // Adjust based on your system
-        vector<thread> consumer_threads;
-        consumer_threads.emplace_back(Schedule, ref(banded_sw_task_queue));
+        
+        assert(banded_sw_task_queue.size()==0);
+        thread consumer_thread(Schedule, ref(banded_sw_task_queue));
     
         bw_finished = 0;
         for (int g = g_begin; g < g_begin + n_groups; g++)
@@ -714,7 +717,6 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
         gettimeofday(&t_start, NULL);
         nvtxRangePush("MyProfileRegion");
-        printf("## Point 2\n");
         for (int g = g_begin; g < g_begin + n_groups; g++)
         {
             int g_idx = g - g_begin;
@@ -765,7 +767,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
 
                 res_s[g][s].resize(*task_num_host[g_idx][s]);
                 // vector<int>num_task_vec;
-                printf("NumTask %d\n", *task_num_host[g_idx][s]);
+                // printf("NumTask %d\n", *task_num_host[g_idx][s]);
                 assert(*task_num_host[g_idx][s] < MaxNumBatch * BatchSize);
                 for(size_t cur = 0; cur < MaxNumBatch; cur ++){
                     size_t it = cur * BatchSize;
@@ -812,18 +814,17 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
             }
         }
 #ifdef USE_GPU_DIFFUSE
+        produce_end = 1;
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
         sw_end_cv.wait(queue_lock, [&]{ return bw_finished.load(); });
         queue_lock.unlock();
         bw_begin = 0;
         bw_finished = 0;
+        produce_end = 0;
         struct timeval schedule_beg, schedule_end;
         gettimeofday(&schedule_beg, NULL);
         // Schedule(banded_sw_task_queue);
-        printf("## Point 4\n");
-        for (auto& thread : consumer_threads) {
-            thread.join();
-        }
+        consumer_thread.join();
 #endif
         CUDA_CALL(cudaStreamSynchronize(streams));
 
