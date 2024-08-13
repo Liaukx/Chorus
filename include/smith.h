@@ -166,6 +166,15 @@ void banded_sw_cpu_kernel(
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
                 int *direct_matrix, record* tile_matrix,int band_width,
                 const int* BLOSUM62);
+void banded_sw_cpu_kernel_thread_pool(
+                int num_task,
+                uint32_t* q_lens, uint32_t* q_idxs, Task* task,
+                const char* query, const char* target, size_t target_len,
+                int * max_score,
+                size_t* q_end_idx, size_t* s_end_idx,
+                char* cigar_op, int* cigar_cnt,int* cigar_len,
+                int *direct_matrix, record* tile_matrix,int band_width,
+                const int* BLOSUM62, ThreadPool* pool);
 
 void banded_sw_cpu_kernel_api(
                 int num_task,

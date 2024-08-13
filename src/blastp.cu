@@ -14,7 +14,7 @@ std::mutex queue_mutex;
 std::condition_variable sw_beg_cv;
 std::condition_variable sw_end_cv;
 atomic<bool> bw_finished ={0};
-atomic<bool> bw_begin= {0};
+// atomic<bool> bw_begin= {0};
 atomic<bool> produce_end= {0};
 
 // vector<SWResult> res_s[MAX_GROUPS_PER_ROUND][NUM_STREAM];
@@ -407,29 +407,27 @@ __global__ void initializeArray_rt(record* array, int value, size_t numElements)
 }
 
 
-void Schedule(queue<banded_sw_task>& banded_sw_task_queue){
+void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
     double CPU_time = 0;
     int cpu_cnt = 0, gpu_cnt = 0;
     struct timeval schedule_beg, schedule_end;
+    
        
     while(true){
         
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
-        sw_beg_cv.wait(queue_lock,[&]{return bw_begin.load();});
-        queue_lock.unlock();
-        while(banded_sw_task_queue.empty() && !produce_end){
-            // sleep(1);
-        }
-        
-        if(banded_sw_task_queue.empty() && produce_end){
-            std::unique_lock<std::mutex> queue_lock(queue_mutex);
-            sw_end_cv.notify_all();
+        sw_beg_cv.wait(queue_lock,[&]{
+            return !banded_sw_task_queue.empty() || produce_end.load();
+        });
+        if(banded_sw_task_queue.empty() && produce_end.load()){
             bw_finished = 1;
             queue_lock.unlock();
-
+            sw_end_cv.notify_one();
             break;
         }
         banded_sw_task cur =  banded_sw_task_queue.front();
+        banded_sw_task_queue.pop();
+        queue_lock.unlock();
         // printf("begin task\n");
         if(checkGPUUtilization() < 50 && cur.num_task > (BatchSize >> 1)  && banded_sw_task_queue.size() > 2){
             // printf("GPU Task\n");
@@ -474,26 +472,27 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue){
             // printf("CPU Task\n");
             gettimeofday(&schedule_beg, NULL);
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
-            banded_sw_cpu_kernel(cur.num_task,
+           
+            banded_sw_cpu_kernel_thread_pool(cur.num_task,
                                 cur.q_lens_h, cur.q_idxs_h, cur.task_h,
                                 cur.query_h, cur.target_h, cur.target_len_h,
                                 cur.max_score_h,
                                 cur.q_end_idx_h, cur.s_end_idx_h,
                                 cur.cigar_op_h, cur.cigar_cnt_h,cur.cigar_len_h,
                                 cur.rd_h, cur.rt_h, cur.band_width,
-                                cur.BLOSUM62_h);
+                                cur.BLOSUM62_h,sw_pool);
             
             gettimeofday(&schedule_end, NULL);
             CPU_time += timeuse(schedule_beg, schedule_end);
         }
-        banded_sw_task_queue.pop();
+        // banded_sw_task_queue.pop();
         // printf("end task\n");
     }
     cout << "schedule CPU computing Time: " << CPU_time << " CPU cnt: " << cpu_cnt  << " GPU cnt " << gpu_cnt << endl;
     return;
 }
 
-void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_groups, size_t s_length[], Task *task_host[][NUM_STREAM], uint32_t *task_num_host[][NUM_STREAM], size_t max_hashtable_capacity, uint32_t max_n_query, uint32_t total_len_query, string db_name, uint32_t db_num, vector<SWResult> *res, size_t total_db_size, TimeProfile &time_prof)
+void search_db_batch(ThreadPool* sw_pool, char *query, char *subj[], vector<QueryGroup> &q_groups, size_t s_length[], Task *task_host[][NUM_STREAM], uint32_t *task_num_host[][NUM_STREAM], size_t max_hashtable_capacity, uint32_t max_n_query, uint32_t total_len_query, string db_name, uint32_t db_num, vector<SWResult> *res, size_t total_db_size, TimeProfile &time_prof)
 {
     struct timeval t_start, t_end, tt_start;
 
@@ -585,6 +584,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     vector<size_t> s_begin_vec;
 
 #ifdef USE_GPU_DIFFUSE
+    
     int direct_matrixSize = (MaxQueryLen+1) * MaxBW;
     int threadsPerBlock = 64;  // 根据 shared memory 限制调整
     int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
@@ -674,9 +674,9 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         if (n_groups > MAX_GROUPS_PER_ROUND)
             n_groups = MAX_GROUPS_PER_ROUND;
 
-        
+       
         assert(banded_sw_task_queue.size()==0);
-        thread consumer_thread(Schedule, ref(banded_sw_task_queue));
+        thread consumer_thread(Schedule, ref(banded_sw_task_queue), sw_pool);
     
         bw_finished = 0;
         for (int g = g_begin; g < g_begin + n_groups; g++)
@@ -802,8 +802,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
                                     };
                     banded_sw_task_queue.push(tmp);
                     std::unique_lock<std::mutex> queue_lock(queue_mutex);
-                    bw_begin = 1;
-                    sw_beg_cv.notify_all();
+                    sw_beg_cv.notify_one();
                     queue_lock.unlock();
                 }
                 // CUDA_CALL(cudaDeviceSynchronize());
@@ -818,17 +817,19 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
         sw_end_cv.wait(queue_lock, [&]{ return bw_finished.load(); });
         queue_lock.unlock();
-        bw_begin = 0;
+        // bw_begin = 0;
         bw_finished = 0;
         produce_end = 0;
         struct timeval schedule_beg, schedule_end;
         gettimeofday(&schedule_beg, NULL);
         // Schedule(banded_sw_task_queue);
-        consumer_thread.join();
 #endif
         CUDA_CALL(cudaStreamSynchronize(streams));
 
 #ifdef USE_GPU_DIFFUSE
+        sw_pool->wait();
+        consumer_thread.join();
+        
         gettimeofday(&schedule_end, NULL);
         cout << "schedule computing Time: " << timeuse(schedule_beg, schedule_end) << endl;
 #endif
@@ -957,6 +958,7 @@ void search_db_batch(const char *query, char *subj[], vector<QueryGroup> &q_grou
     //     n_groups = MAX_GROUPS_PER_ROUND;
     // }
 #ifdef USE_GPU_DIFFUSE
+    // delete sw_pool;
     free(score); 
     
     free(s_end); 
@@ -1101,6 +1103,7 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
 
     pool = new ThreadPool(num_threads);
+    ThreadPool* sw_pool = new ThreadPool(56);
 
     gettimeofday(&t_end, NULL);
     cout << "Prepare Time: " << timeuse(t_start, t_end) << endl;
@@ -1128,7 +1131,7 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
                 s_len[s] = (s_size[s] * 8) / 5;
             }
 
-            search_db_batch(query, subj, q_groups, s_len, task_host, task_num_host, max_hashtable_capacity, max_n_query, q_length, db_name, i, res_d, total_db_size, time_prof);
+            search_db_batch(sw_pool,query, subj, q_groups, s_len, task_host, task_num_host, max_hashtable_capacity, max_n_query, q_length, db_name, i, res_d, total_db_size, time_prof);
 
             for (int s = 0; s < NUM_STREAM; s++)
             {
@@ -1193,7 +1196,9 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
 
     free(query);
+    pool->wait();
     delete pool;
+    delete sw_pool;
 
     gettimeofday(&t_end, NULL);
 
