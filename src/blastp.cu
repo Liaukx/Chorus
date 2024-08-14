@@ -429,7 +429,7 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
         banded_sw_task_queue.pop();
         queue_lock.unlock();
         // printf("begin task\n");
-        if(checkGPUUtilization() < 50 && cur.num_task > (BatchSize >> 1)  && banded_sw_task_queue.size() > 2){
+        if(checkGPUUtilization() < 50 && cur.num_task > (BatchSize >> 1) && produce_end.load()){
             // printf("GPU Task\n");
             gpu_cnt += 1;
             int* direction_matrix;
