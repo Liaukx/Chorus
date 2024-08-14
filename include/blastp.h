@@ -67,8 +67,8 @@ typedef struct{
     int* cigar_cnt_h;
     int* cigar_len_h;
 
-    int *rd_h;
-    record* rt_h;
+    // int *rd_h;
+    // record* rt_h;
 
     const int* BLOSUM62_h;
 

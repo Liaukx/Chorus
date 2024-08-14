@@ -173,7 +173,7 @@ void banded_sw_cpu_kernel_thread_pool(
                 int * max_score,
                 size_t* q_end_idx, size_t* s_end_idx,
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
-                int *direct_matrix, record* tile_matrix,int band_width,
+                int band_width,
                 const int* BLOSUM62, ThreadPool* pool);
 
 void banded_sw_cpu_kernel_api(

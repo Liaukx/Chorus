@@ -479,7 +479,7 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
                                 cur.max_score_h,
                                 cur.q_end_idx_h, cur.s_end_idx_h,
                                 cur.cigar_op_h, cur.cigar_cnt_h,cur.cigar_len_h,
-                                cur.rd_h, cur.rt_h, cur.band_width,
+                                cur.band_width,
                                 cur.BLOSUM62_h,sw_pool);
             
             gettimeofday(&schedule_end, NULL);
@@ -610,8 +610,8 @@ void search_db_batch(ThreadPool* sw_pool, char *query, char *subj[], vector<Quer
     cigar_cnt = (int*)malloc(sizeof(int) * MaxAlignLen * BatchSize);
     cigar_len = (int*)malloc(sizeof(int)* BatchSize);
     cigar_op = (char*)malloc(sizeof(char) * MaxAlignLen * BatchSize);
-    int* rd = (int*)malloc(direct_matrixSize * sizeof(int) * BatchSize);   // direct_matrixSize * BatchSize * sizeof(int)
-    record* rt = (record*)malloc(MaxBW * (TILE_SIZE + 1) * sizeof(record) * BatchSize); 
+    // int* rd = (int*)malloc(direct_matrixSize * sizeof(int) * BatchSize);   // direct_matrixSize * BatchSize * sizeof(int)
+    // record* rt = (record*)malloc(MaxBW * (TILE_SIZE + 1) * sizeof(record) * BatchSize); 
 
     for(int g = 0; g < n_groups; ++ g){
 
@@ -793,7 +793,7 @@ void search_db_batch(ThreadPool* sw_pool, char *query, char *subj[], vector<Quer
                                     score_h[g_idx][s][cur],
                                     q_end_h[g_idx][s][cur], s_end_h[g_idx][s][cur],
                                     cigar_op_h[g_idx][s][cur], cigar_cnt_h[g_idx][s][cur], cigar_len_h[g_idx][s][cur],
-                                    rd, rt, 
+                                    // rd, rt, 
                                     BLOSUM62,
                                     ref(streams)
                                     // ref(kernels_done[g_idx][s][cur]),
@@ -831,7 +831,7 @@ void search_db_batch(ThreadPool* sw_pool, char *query, char *subj[], vector<Quer
         consumer_thread.join();
         
         gettimeofday(&schedule_end, NULL);
-        cout << "schedule computing Time: " << timeuse(schedule_beg, schedule_end) << endl;
+        cout << "synchronize Time: " << timeuse(schedule_beg, schedule_end) << endl;
 #endif
         // for(int cur = 0; cur < MaxNumBatch; ++ cur){
         //     CUDA_CALL(cudaStreamSynchronize(copy_streams[cur]));
@@ -966,8 +966,8 @@ void search_db_batch(ThreadPool* sw_pool, char *query, char *subj[], vector<Quer
     
     free(cigar_op); 
     free(cigar_cnt); 
-    free(rd); 
-    free(rt); 
+    // free(rd); 
+    // free(rt); 
     for(int g = 0; g < n_groups; ++ g){
 
         for(int s = 0; s < NUM_STREAM; ++ s){

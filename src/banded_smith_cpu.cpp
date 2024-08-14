@@ -794,16 +794,20 @@ void banded_sw_cpu_kernel_per_task(
                 int * max_score,
                 size_t* q_end_idx, size_t* s_end_idx,
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
-                int *direct_matrix, record* tile_matrix,int band_width,
+                int band_width,
                 const int* BLOSUM62){
-        // int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
-        // record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
-        int* rd = (int*)malloc(sizeof(int) *  (MaxQueryLen+1) * MaxBW);
-        record* tile = (record*)malloc(sizeof(record) *  MaxBW * (TILE_SIZE + 1));
-        memset(rd,0,sizeof(int) *  (MaxQueryLen+1) * MaxBW);
-        memset(tile,0,sizeof(record) *  MaxBW * (TILE_SIZE + 1));
         size_t query_len = q_lens[task[idx].q_id];
         assert( query_len < MaxQueryLen);
+        size_t width = 2 * band_width + 1;
+        size_t height = query_len + 1;
+        assert(width < MaxBW);
+
+        // int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        // record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
+        int* rd = (int*)malloc(sizeof(int) *  (query_len+1) * width);
+        record* tile = (record*)malloc(sizeof(record) *  MaxBW * (TILE_SIZE + 1));
+        memset(rd,0,sizeof(int) *  (query_len+1) * width);
+        memset(tile,0,sizeof(record) *  MaxBW * (TILE_SIZE + 1));
 
         size_t q_idx  = q_idxs[task[idx].q_id];
         size_t diag  = task[idx].key;
@@ -811,9 +815,6 @@ void banded_sw_cpu_kernel_per_task(
         int64_t c_begin = (int64_t)diag - band_width - query_len + 2;
         // size_t c_end = diag + band_width;
 
-        size_t width = 2 * band_width + 1;
-        size_t height = MaxQueryLen + 1;
-        assert(width < MaxBW);
 
         //init:
         max_score[idx] = 0;
@@ -944,9 +945,8 @@ void banded_sw_cpu_kernel_thread_pool(
                 int * max_score,
                 size_t* q_end_idx, size_t* s_end_idx,
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
-                int *direct_matrix, record* tile_matrix,int band_width,
+                int band_width,
                 const int* BLOSUM62, ThreadPool* sw_pool){
-    assert(num_task < BatchSize * MaxNumBatch);
     for(size_t idx = 0; idx < num_task; ++ idx){
         sw_pool->enqueue([=, idx] {
             banded_sw_cpu_kernel_per_task(
@@ -954,7 +954,7 @@ void banded_sw_cpu_kernel_thread_pool(
                 query, target, target_len,
                 max_score, q_end_idx, s_end_idx,
                 cigar_op, cigar_cnt, cigar_len,
-                direct_matrix, tile_matrix, band_width,
+                band_width,
                 BLOSUM62);
         });
     }
