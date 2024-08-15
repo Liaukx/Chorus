@@ -634,6 +634,7 @@ void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* ciga
 
 
 void banded_sw_cpu_kernel(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -646,12 +647,12 @@ double start_time = omp_get_wtime();
 nvtxRangePushA("OpenMP Parallel Region");
 #pragma omp parallel for schedule(dynamic)
     for(int idx = 0; idx < num_task; ++ idx){
-        int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        int* rd = direct_matrix + idx *  (max_len_query+1) * MaxBW;
         record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
-        memset(rd,0,sizeof(int) *  (MaxQueryLen+1) * MaxBW);
+        memset(rd,0,sizeof(int) *  (max_len_query+1) * MaxBW);
         memset(tile,0,sizeof(record) *  MaxBW * (TILE_SIZE + 1));
         size_t query_len = q_lens[task[idx].q_id];
-        assert( query_len < MaxQueryLen);
+        assert( query_len < max_len_query);
 
         size_t q_idx  = q_idxs[task[idx].q_id];
         size_t diag  = task[idx].key;
@@ -660,7 +661,7 @@ nvtxRangePushA("OpenMP Parallel Region");
         // size_t c_end = diag + band_width;
 
         size_t width = 2 * band_width + 1;
-        size_t height = MaxQueryLen + 1;
+        size_t height = max_len_query + 1;
         assert(width < MaxBW);
 
         //init:
@@ -788,6 +789,7 @@ nvtxRangePushA("OpenMP Parallel Region");
 }
 
 void banded_sw_cpu_kernel_per_task(
+                uint32_t max_len_query,
                 size_t idx,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -797,12 +799,12 @@ void banded_sw_cpu_kernel_per_task(
                 int band_width,
                 const int* BLOSUM62){
         size_t query_len = q_lens[task[idx].q_id];
-        assert( query_len < MaxQueryLen);
+        assert( query_len <= max_len_query);
         size_t width = 2 * band_width + 1;
         size_t height = query_len + 1;
         assert(width < MaxBW);
 
-        // int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        // int* rd = direct_matrix + idx *  (max_len_query+1) * MaxBW;
         // record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
         int* rd = (int*)malloc(sizeof(int) *  (query_len+1) * width);
         record* tile = (record*)malloc(sizeof(record) *  MaxBW * (TILE_SIZE + 1));
@@ -939,6 +941,7 @@ void banded_sw_cpu_kernel_per_task(
 }
 
 void banded_sw_cpu_kernel_thread_pool(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -948,8 +951,9 @@ void banded_sw_cpu_kernel_thread_pool(
                 int band_width,
                 const int* BLOSUM62, ThreadPool* sw_pool){
     for(size_t idx = 0; idx < num_task; ++ idx){
-        sw_pool->enqueue([=, idx] {
+        sw_pool->enqueue([=] {
             banded_sw_cpu_kernel_per_task(
+                max_len_query,
                 idx, q_lens, q_idxs, task,
                 query, target, target_len,
                 max_score, q_end_idx, s_end_idx,
@@ -963,6 +967,7 @@ void banded_sw_cpu_kernel_thread_pool(
 }
 
 void banded_sw_cpu_kernel_api(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -973,12 +978,12 @@ void banded_sw_cpu_kernel_api(
                 const int* BLOSUM62){
 // #pragma omp parallel for
     for(int idx = 0; idx < num_task; ++ idx){
-        int* rd = direct_matrix + idx *  (MaxQueryLen+1) * MaxBW;
+        int* rd = direct_matrix + idx *  (max_len_query+1) * MaxBW;
         record* tile = tile_matrix + idx *  MaxBW * (TILE_SIZE + 1); 
-        memset(rd,0,sizeof(int) *  (MaxQueryLen+1) * MaxBW);
+        memset(rd,0,sizeof(int) *  (max_len_query+1) * MaxBW);
         memset(tile,0,sizeof(record) *  MaxBW *(TILE_SIZE + 1));
         size_t query_len = q_lens[task[idx].q_id];
-        assert( query_len < MaxQueryLen);
+        assert( query_len < max_len_query);
 
         size_t q_idx  = q_idxs[task[idx].q_id];
         size_t diag  = task[idx].key;
@@ -987,7 +992,7 @@ void banded_sw_cpu_kernel_api(
         // size_t c_end = diag + band_width;
  
         size_t width = 2 * band_width + 1;
-        size_t height = MaxQueryLen + 1;
+        size_t height = max_len_query + 1;
         assert(width < MaxBW);
 
         //init:

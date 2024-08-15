@@ -20,6 +20,7 @@ struct TimeProfile
 
 
 typedef struct{
+    uint32_t max_len_query;
     int num_task;
     int band_width;
     size_t begin;
@@ -44,8 +45,8 @@ typedef struct{
     int* cigar_cnt_d;
     int* cigar_len_d;
 
-    int *rd_d;
-    record* rt_d;
+    // int *rd_d;
+    // record* rt_d;
 
     int* BLOSUM62_d;
 

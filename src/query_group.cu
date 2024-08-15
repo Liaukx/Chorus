@@ -11,7 +11,7 @@ __inline__ size_t min_full_bit(size_t x)
     return (x + 1);    // 0100 0000 0000 0000 0000 0000 0000 0000 0000 0000
 }
 
-vector<QueryGroup> init_query_group(int n_query, size_t db_size, vector<uint32_t> q_lengths, vector<uint32_t> q_offsets, char *query, size_t &max_hashtable_capacity, uint32_t &max_n_query)
+vector<QueryGroup> init_query_group(int n_query, size_t db_size, vector<uint32_t> q_lengths, vector<uint32_t> q_offsets, char *query, size_t &max_hashtable_capacity, uint32_t &max_n_query,uint32_t& max_len_query)
 {
 
     assert(n_query == q_lengths.size());
@@ -59,7 +59,8 @@ vector<QueryGroup> init_query_group(int n_query, size_t db_size, vector<uint32_t
     int allocated = 0;
     max_hashtable_capacity = 0;
     max_n_query = 0;
-    uint32_t max_len_query = 0;
+    max_len_query = 0;
+    // uint32_t max_len_query = 0;
     while (allocated < n_query)
     {
         n_groups++;

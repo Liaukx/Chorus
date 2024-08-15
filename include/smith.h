@@ -24,7 +24,6 @@ using namespace std;
 
 
 #define MaxAlignLen 3000
-#define MaxQueryLen 20000
 #define TILE_SIZE 2
 #define MaxBW 25
 #define BatchSize 4096
@@ -158,6 +157,7 @@ void cpu_kernel(SWResult *res,
 void gasal_run(SWTasks tasks, vector<SWResult> res[][NUM_STREAM],const char* q_dev, const char* s_dev, int num_g, int span);
 
 void banded_sw_cpu_kernel(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -167,6 +167,7 @@ void banded_sw_cpu_kernel(
                 int *direct_matrix, record* tile_matrix,int band_width,
                 const int* BLOSUM62);
 void banded_sw_cpu_kernel_thread_pool(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
@@ -177,6 +178,7 @@ void banded_sw_cpu_kernel_thread_pool(
                 const int* BLOSUM62, ThreadPool* pool);
 
 void banded_sw_cpu_kernel_api(
+                uint32_t max_len_query,
                 int num_task,
                 uint32_t* q_lens, uint32_t* q_idxs, Task* task,
                 const char* query, const char* target, size_t target_len,
