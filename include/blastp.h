@@ -82,5 +82,20 @@ typedef struct{
     // cudaEvent_t &event;
 } banded_sw_task;
 
+typedef struct{
+    int num_task;
+    size_t begin;
+    int* cigar_len;
+    char* cigar_op;
+    int* cigar_cnt;
+    size_t* q_start;
+    size_t* c_start;
+    std::vector<SWResult>& res_s;
+    int* score;
+    Task* task;
+    const char* query;
+    const char* target;
+} report_task;
+
 
 void blastp(string argv_query, vector<string> argv_dbs, string argv_out);

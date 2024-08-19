@@ -1,6 +1,6 @@
 #include "util.h"
 
-#define MASK5(v) (v & 0b11111)
+
 
 ArgumentParser arg_parser;
 int seed_length;
@@ -399,11 +399,11 @@ void proceed_result(vector<SWResult> *res_d, vector<SWResult> &res_t, const char
     // cout<<endl;
 }
 
-inline char get_char(const char *s, size_t offset)
-{
-    offset *= 5;
-    return MASK5((unsigned)((*((uint16_t *)&(s[offset >> 3]))) >> (offset & 7)));
-}
+// inline char get_char(const char *s, size_t offset)
+// {
+//     offset *= 5;
+//     return MASK5((unsigned)((*((uint16_t *)&(s[offset >> 3]))) >> (offset & 7)));
+// }
 
 void get_arg(const char *name, int &v, int default_v)
 {

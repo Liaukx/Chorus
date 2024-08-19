@@ -36,6 +36,8 @@ extern ThreadPool* pool;
 // extern StripedSmithWaterman::Filter filter;
 // typedef boost::asio::thread_pool ThreadPool;
 
+#define MASK5(v) (v & 0b11111)
+
 #define CUDA_CALL(F)                                                          \
     if ((F) != cudaSuccess)                                                   \
     {                                                                         \
@@ -196,7 +198,11 @@ int check_db(const char *db, size_t &max_size, size_t& total_size);
 void load_seq(string db, int num, char *&str, size_t &len);
 void proceed_result(vector<SWResult> *res_d, vector<SWResult> &res_t, const char *query, const char *subj, QueryGroup &q_group, const char *s_name, const size_t* s_offsets, const size_t* sn_offsets, const size_t s_num ,size_t total_db_size);
 
-char get_char(const char *s, size_t offset);
+inline char get_char(const char *s, size_t offset)
+{
+    offset *= 5;
+    return MASK5((unsigned)((*((uint16_t *)&(s[offset >> 3]))) >> (offset & 7)));
+}
 
 void get_arg(const char* name, int& v, int default_v);
 void get_arg(const char* name, double& v ,double default_v);

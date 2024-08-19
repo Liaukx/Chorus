@@ -90,13 +90,13 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
 
 inline void ThreadPool::wait() {
     // Wait for all active tasks to complete
-    struct timeval start_time, end_time;
-    gettimeofday(&start_time, NULL);
+    // struct timeval start_time, end_time;
+    // gettimeofday(&start_time, NULL);
     while (active_tasks.load() > 0) {
         std::this_thread::yield();
     }
-    gettimeofday(&end_time, NULL);
-    printf("## wait time  %f\n",((end_time.tv_sec - start_time.tv_sec) + (double)(end_time.tv_usec - start_time.tv_usec)) / 1000000.0);
+    // gettimeofday(&end_time, NULL);
+    // printf("## wait time  %f\n",((end_time.tv_sec - start_time.tv_sec) + (double)(end_time.tv_usec - start_time.tv_usec)) / 1000000.0);
 
 }
 
