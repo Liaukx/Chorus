@@ -800,8 +800,9 @@ void banded_sw_cpu_kernel_per_task(
                 const int* BLOSUM62){
         size_t query_len = q_lens[task[idx].q_id];
         assert( query_len <= max_len_query);
-        size_t width = 2 * band_width + 1;
+        int width = 2 * band_width + 1;
         size_t height = query_len + 1;
+        // printf("band_width = %d width = %d\t MaxBw = %d\n",band_width, width, MaxBW);
         assert(width < MaxBW);
 
         // int* rd = direct_matrix + idx *  (max_len_query+1) * MaxBW;
@@ -929,11 +930,12 @@ void banded_sw_cpu_kernel_per_task(
             }
             (cigar_cnt + idx * MaxAlignLen)[cigar_cur_len] = cur_cigar_cnt;
             (cigar_op + idx * MaxAlignLen)[cigar_cur_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
+            if(cigar_cur_len >= MaxAlignLen ){
+                cigar_cur_len --;
+                break;
+            }
         }
 
-        // free(rt);
-        if(cigar_cur_len >= MaxAlignLen || cigar_cur_len <= 0)
-            printf("@@ cigar_len %d %d\n", idx,cigar_cur_len);
         assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
         cigar_len[idx] = cigar_cur_len;
         free(tile);
@@ -948,7 +950,7 @@ void banded_sw_cpu_kernel_thread_pool(
                 int * max_score,
                 size_t* q_end_idx, size_t* s_end_idx,
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
-                int band_width,
+                const int band_width,
                 const int* BLOSUM62, ThreadPool* sw_pool){
     for(size_t idx = 0; idx < num_task; ++ idx){
         sw_pool->enqueue([=] {
@@ -962,8 +964,6 @@ void banded_sw_cpu_kernel_thread_pool(
                 BLOSUM62);
         });
     }
-    
-    // printf("omp time %f, task = %d\n",parallel_time, num_task);
 }
 
 void banded_sw_cpu_kernel_api(

@@ -176,7 +176,7 @@ __global__ void banded_sw_kernel(
                 int * max_score,
                 size_t* q_end_idx, size_t* s_end_idx,
                 char* cigar_op, int* cigar_cnt,int* cigar_len,
-                int *rd, record* rt,int band_width,
+                uint8_t *rd, record* rt,int band_width,
                 int* BLOSUM62){
 
     int idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -246,7 +246,14 @@ __global__ void banded_sw_kernel(
                 
                 // printf("(query = %target,c = %c) BLOSUM62 = %d tile[_q * width + _c].s = %d\n", chq+65,chc+65,BLOSUM62[chq * 26 + chc], tile[_q * width + _c].s);
                 // (rd + idx*direct_matrixSize)[_c * height + _q + q_offset] = (score == tile[_q * width + _c].x)*TOP + (score == tile[_q * width + _c].y)*LEFT + (tile[_c * height + _q + q_offset].m)*DIAG; 
-            
+
+                // int byteIndex = (calIndex(_c, _q+q_offset,height) * BatchSize + idx) >> 2; // 4 bits per byte
+                // int bitOffset = ((calIndex(_c, _q+q_offset,height) * BatchSize + idx) & 0x03) << 1;
+                // rd[byteIndex] &= ~(0x03 << bitOffset);
+                // rd[byteIndex] |= (score?( \
+                //         (score == tile[calIndex(_q,_c,MaxBW)].m) ? DIAG << bitOffset : \
+                //      ((score == tile[calIndex(_q,_c,MaxBW)].y) ? LEFT << bitOffset: TOP << bitOffset )):0);
+
                 rd[calIndex(_c, _q+q_offset,height) * BatchSize + idx] = (score?( \
                     (score == tile[calIndex(_q,_c,MaxBW)].m) ? DIAG : \
                     ((score == tile[calIndex(_q,_c,MaxBW)].y) ? LEFT :TOP )):0);
@@ -278,8 +285,15 @@ __global__ void banded_sw_kernel(
 
     // int cnt_q = 0, cnt_c = 0;
     int cigar_cur_len = 0;
+    // int byteIndex = (BatchSize * calIndex(cur_c,cur_q,height) + idx) / 4;
+    // int bitOffset = ( (BatchSize * calIndex(cur_c,cur_q,height) + idx) & 0x03) << 1;
+    // while ((rd[byteIndex] >> (bitOffset)) & 0x03 && cigar_cur_len < MaxAlignLen)
     while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx])
     {
+        // byteIndex = (BatchSize * calIndex(cur_c,cur_q,height) + idx) / 4;
+        // bitOffset = (BatchSize * calIndex(cur_c,cur_q,height) + idx) % 4;
+        // int d = (rd[byteIndex] >> (bitOffset)) & 0x03;
+
         int d = rd[BatchSize * calIndex(cur_c,cur_q,height) + idx];
         // size_t res_q = (d&0x01) ? (cur_q + q_idx) : (size_t)-1;
         // size_t res_c = (d&0x02) ? (c_begin + cur_c + cur_q) : (size_t)-1;
@@ -287,6 +301,7 @@ __global__ void banded_sw_kernel(
         // q_res_d[idx* MaxAlignLen + (cnt_q)] = (res_q);
         // s_res_d[idx* MaxAlignLen + (cnt_c)] = (res_c);
         int cur_cigar_cnt = 0;
+        // while (((rd[byteIndex] >> bitOffset) & 0x03)==d){
         while (rd[BatchSize * calIndex(cur_c,cur_q,height) + idx] && rd[BatchSize * calIndex(cur_c,cur_q,height) + idx]==d){
             cur_cigar_cnt ++;
             
@@ -297,6 +312,8 @@ __global__ void banded_sw_kernel(
             cur_q -= (d == DIAG || d == TOP);
             cur_c += (d == TOP); // Increment cur_c if TOP (01b)
             cur_c -= (d == LEFT); // Decrement cur_c if LEFT (10b)
+            // byteIndex = (BatchSize * calIndex(cur_c,cur_q,height) + idx) / 4;
+            // bitOffset = (BatchSize * calIndex(cur_c,cur_q,height) + idx) % 4;
         }
         (cigar_cnt + idx * MaxAlignLen)[cigar_cur_len] = cur_cigar_cnt;
         (cigar_op + idx * MaxAlignLen)[cigar_cur_len++] = ((d==DIAG)?'M':((d==TOP)?'D':'I'));
@@ -304,7 +321,7 @@ __global__ void banded_sw_kernel(
 
     // free(rt);
     // printf("@@ cigar_len %d %d\n", idx,cigar_len);
-    assert(cigar_cur_len > 0 && cigar_cur_len < MaxAlignLen);
+    assert(cigar_cur_len > 0 && cigar_cur_len <= MaxAlignLen);
     cigar_len[idx] = cigar_cur_len;
 }
 
@@ -356,13 +373,7 @@ void call_results(cudaEvent_t& event, \
                 ThreadPool* pool, std::vector<std::future<int>>& rs) {
     CUDA_CALL(cudaEventSynchronize(event));
     CUDA_CALL(cudaEventDestroy(event));
-    // CUDA_CALL(cudaFreeAsync(s_end_d, stream));
-    // CUDA_CALL(cudaFreeAsync(q_end_d, stream));
-    // CUDA_CALL(cudaFreeAsync(cigar_op_d, stream));
-    // CUDA_CALL(cudaFreeAsync(cigar_cnt_d, stream));
-    // CUDA_CALL(cudaFreeAsync(cigar_len_d, stream));
-    // CUDA_CALL(cudaFreeAsync(score_d, stream));
-    // cout << "=";
+
     mu2.lock();
     for (size_t i = 0; i < num_task; ++i) {
         rs.emplace_back(pool->enqueue([&, i] {
@@ -412,11 +423,12 @@ __global__ void initializeArray_rt(record* array, int value, size_t numElements)
 
 
 void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
-    double CPU_time = 0;
-    int cpu_cnt = 0, gpu_cnt = 0;
-    struct timeval cpu_schedule_beg, cpu_schedule_end, schedule_beg, schedule_end;
-    gettimeofday(&schedule_beg, NULL);
-       
+    // double CPU_time = 0;
+    // int cpu_cnt = 0, gpu_cnt = 0;
+    // struct timeval cpu_schedule_beg, cpu_schedule_end, schedule_beg, schedule_end;
+    // gettimeofday(&schedule_beg, NULL);
+    cudaStream_t copy_stream;
+    cudaStreamCreate(&copy_stream);
     while(true){
         
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
@@ -429,22 +441,23 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
             sw_end_cv.notify_one();
             break;
         }
-        banded_sw_task cur =  banded_sw_task_queue.front();
+        banded_sw_task& cur =  banded_sw_task_queue.front();
         banded_sw_task_queue.pop();
         queue_lock.unlock();
         // printf("begin task\n");
         if(checkGPUUtilization() < 50 && cur.num_task > (BatchSize >> 1) && produce_end.load()){
             // printf("GPU Task\n");
-            gpu_cnt += 1;
-            int* direction_matrix;
+            // gpu_cnt += 1;
+            uint8_t* direction_matrix;
             record* tiled_direction_matrix;
-            CUDA_CALL(cudaMallocAsync((void**)&direction_matrix, MaxBW * (cur.max_len_query + 1) * BatchSize * sizeof(int), cur.stream));
+            // CUDA_CALL(cudaMallocAsync((void**)&direction_matrix, ((MaxBW * (cur.max_len_query + 1) * BatchSize) >> 1) * sizeof(unsigned char), cur.stream));
+            CUDA_CALL(cudaMallocAsync((void**)&direction_matrix, MaxBW * (cur.max_len_query + 1) * BatchSize * sizeof(uint8_t), cur.stream));
             CUDA_CALL(cudaMallocAsync((void**)&tiled_direction_matrix, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record), cur.stream));
-            int blocks_rd = (MaxBW * (cur.max_len_query + 1)  * BatchSize + cur.threadsPerBlock - 1) / cur.threadsPerBlock;
-            int blocks_rt = (MaxBW * (TILE_SIZE + 1) * BatchSize + cur.threadsPerBlock - 1) / cur.threadsPerBlock;
-            initializeArray_rd<<<blocks_rd, cur.threadsPerBlock, 0, cur.stream>>>(direction_matrix, 0, MaxBW * (cur.max_len_query + 1) * BatchSize);
-            initializeArray_rt<<<blocks_rt, cur.threadsPerBlock, 0, cur.stream>>>(tiled_direction_matrix, 0, MaxBW * (TILE_SIZE + 1) * BatchSize);
-                    
+
+            // Initialize memory
+            CUDA_CALL(cudaMemsetAsync(direction_matrix, 0, MaxBW * (cur.max_len_query + 1) * BatchSize  * sizeof(uint8_t), cur.stream));
+            CUDA_CALL(cudaMemsetAsync(tiled_direction_matrix, 0, MaxBW * (TILE_SIZE + 1) * BatchSize * sizeof(record), cur.stream));
+            
            banded_sw_kernel<<<cur.blocks, cur.threadsPerBlock,0,cur.stream>>>(
                                 cur.max_len_query,
                                 cur.num_task,
@@ -455,17 +468,19 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
                                 cur.cigar_op_d, cur.cigar_cnt_d,cur.cigar_len_d,
                                 direction_matrix, tiled_direction_matrix, cur.band_width,
                                 cur.BLOSUM62_d);
-            // cudaEventRecord(cur.kernels_done, cur.stream);
-            // cudaStreamWaitEvent(cur.copy_stream, cur.kernels_done, 0);
-            // cudaEventDestroy(cur.kernels_done);
+            cudaEvent_t kernels_done;
+            CUDA_CALL(cudaEventCreate(&kernels_done));
+            cudaEventRecord(kernels_done, cur.stream);
+            cudaStreamWaitEvent(copy_stream, kernels_done, 0);
+            cudaEventDestroy(kernels_done);
 
-            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, copy_stream));
             
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,copy_stream));
             
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
             
@@ -473,9 +488,9 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
             CUDA_CALL(cudaFreeAsync(direction_matrix, cur.stream));
             
         }else{
-            cpu_cnt += 1;
+            // cpu_cnt += 1;
             // printf("CPU Task\n");
-            gettimeofday(&cpu_schedule_beg, NULL);
+            // gettimeofday(&cpu_schedule_beg, NULL);
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
            
             banded_sw_cpu_kernel_thread_pool(cur.max_len_query, cur.num_task,
@@ -487,16 +502,31 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
                                 cur.band_width,
                                 cur.BLOSUM62_h,sw_pool);
             
-            gettimeofday(&cpu_schedule_end, NULL);
-            CPU_time += timeuse(cpu_schedule_beg, cpu_schedule_end);
+            // gettimeofday(&cpu_schedule_end, NULL);
+            // CPU_time += timeuse(cpu_schedule_beg, cpu_schedule_end);
         }
         // banded_sw_task_queue.pop();
         // printf("end task\n");
     }
-    gettimeofday(&schedule_end, NULL);
-    cout << "schedule CPU computing Time: " << CPU_time << " CPU cnt: " << cpu_cnt  << " GPU cnt " << gpu_cnt << endl;
-    cout << "schedule Time: " << timeuse(schedule_beg, schedule_end) << endl;
+    // gettimeofday(&schedule_end, NULL);
+    // printf("schedule CPU schedule Time: %f,  CPU cnt: %d, GPU cnt %d\n", CPU_time, cpu_cnt , gpu_cnt );
+    // printf("schedule Time: %f\n", timeuse(schedule_beg, schedule_end));
+    cudaStreamSynchronize(copy_stream);
+    cudaStreamDestroy(copy_stream);
     return;
+}
+void _report(report_task& cur){
+    for(size_t idx = 0; idx < cur.num_task; ++ idx){
+        pool->enqueue([=] {
+            cigar_to_index_and_report(idx, cur.begin, 
+                                    cur.cigar_len, cur.cigar_op, cur.cigar_cnt,
+                                    cur.q_start, cur.c_start,
+                                    cur.res_s,
+                                    cur.score,
+                                    cur.task,
+                                    cur.query, cur.target);
+        });
+    }
 }
 void Schedule_report(queue<report_task>& report_task_queue, ThreadPool* pool){
     struct timeval cpu_schedule_beg, cpu_schedule_end, schedule_beg, schedule_end;
@@ -509,26 +539,15 @@ void Schedule_report(queue<report_task>& report_task_queue, ThreadPool* pool){
             return !report_task_queue.empty() || report_end.load();
         });
         if(report_task_queue.empty() && report_end.load()){
-            printf("## end\n");
             report_finish = 1;
             queue_lock.unlock();
             report_end_cv.notify_one();
             break;
         }
-        report_task cur =  report_task_queue.front();
+        report_task& cur =  report_task_queue.front();
         report_task_queue.pop();
         queue_lock.unlock();
-        for(size_t idx = 0; idx < cur.num_task; ++ idx){
-            pool->enqueue([=] {
-                cigar_to_index_and_report(idx, cur.begin, 
-                                        cur.cigar_len, cur.cigar_op, cur.cigar_cnt,
-                                        cur.q_start, cur.c_start,
-                                        cur.res_s,
-                                        cur.score,
-                                        cur.task,
-                                        cur.query, cur.target);
-            });
-        }
+        _report(cur);
     }
 }
 
@@ -563,6 +582,7 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
                     cudaStream_t& streams,
                     cudaStream_t& malloc_streams,
                     cudaStream_t& sw_stream,
+                    // cudaStream_t& copy_stream,
                     // int* direction_matrix[][NUM_STREAM][MaxNumBatch],
                     // record* tiled_direction_matrix[][NUM_STREAM][MaxNumBatch],
                     int* BLOSUM62_d,
@@ -591,7 +611,7 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
     struct timeval t_start, t_end, tt_start;
 
     gettimeofday(&t_start, NULL);
-    int threadsPerBlock = 64;  // 根据 shared memory 限制调整
+    int threadsPerBlock = 128;  // 根据 shared memory 限制调整
     int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
     
 
@@ -662,11 +682,6 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
         n_groups = q_groups.size() - g_begin;
         if (n_groups > MAX_GROUPS_PER_ROUND)
             n_groups = MAX_GROUPS_PER_ROUND;
-
-       
-        assert(banded_sw_task_queue.size()==0);
-        thread consumer_thread(Schedule, ref(banded_sw_task_queue), sw_pool);
-        thread report_thread(Schedule_report, ref(report_task_queue), pool);
     
         bw_finished = 0;
         for (int g = g_begin; g < g_begin + n_groups; g++)
@@ -687,15 +702,10 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
 
         
         thread result_threads[n_groups][NUM_STREAM];
-#ifdef USE_GPU_DIFFUSE
         
-        cudaEvent_t copies_done[n_groups][NUM_STREAM][MaxNumBatch];
-        cudaEvent_t kernels_done[n_groups][NUM_STREAM][MaxNumBatch];
-        
-        thread report_threads[n_groups][NUM_STREAM][MaxNumBatch];
-        vector<future<int>> rs_report[n_groups][NUM_STREAM][MaxNumBatch];
+        // cudaEvent_t copies_done[n_groups][NUM_STREAM][MaxNumBatch];
+        // cudaEvent_t kernels_done[n_groups][NUM_STREAM][MaxNumBatch];
 
-#endif
         cudaEvent_t malloc_finished;
         cudaEvent_t seeding_finished[n_groups][NUM_STREAM];
         
@@ -706,7 +716,10 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
         // cout << "Prepare mem and data Time: " << timeuse(t_start, t_end) << endl;
 
         gettimeofday(&t_start, NULL);
-        nvtxRangePush("MyProfileRegion");
+
+        assert(banded_sw_task_queue.size()==0);
+        thread consumer_thread(Schedule, ref(banded_sw_task_queue), sw_pool);
+
         for (int g = g_begin; g < g_begin + n_groups; g++)
         {
             int g_idx = g - g_begin;
@@ -715,12 +728,12 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
             {
                 CUDA_CALL(cudaEventCreate(&malloc_finished));
                 CUDA_CALL(cudaEventCreate(&seeding_finished[g_idx][s]));
-#ifdef USE_GPU_DIFFUSE
-                for(int cur = 0; cur < MaxNumBatch; ++ cur){
-                    CUDA_CALL(cudaEventCreate(&copies_done[g_idx][s][cur]));
-                    CUDA_CALL(cudaEventCreate(&kernels_done[g_idx][s][cur]));
-                }
-#endif
+
+                // for(int cur = 0; cur < MaxNumBatch; ++ cur){
+                //     CUDA_CALL(cudaEventCreate(&copies_done[g_idx][s][cur]));
+                //     CUDA_CALL(cudaEventCreate(&kernels_done[g_idx][s][cur]));
+                // }
+                
                 // pHashTable[g_idx][s] = create_hashtable(max_hashtable_capacity);
                 // CUDA_CALL(cudaStreamSynchronize(malloc_streams));
                 pHashTable[g_idx][s] = create_hashtable_async(max_hashtable_capacity,malloc_streams);
@@ -751,7 +764,6 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
                 CUDA_CALL(cudaMemcpyAsync(task_host[g_idx][s], task_dev[g_idx][s], MAX_FILTER_TASK * sizeof(Task), cudaMemcpyDeviceToHost, streams));
                 CUDA_CALL(cudaEventRecord(seeding_finished[g_idx][s], streams));
                
-#ifdef USE_GPU_DIFFUSE
                 CUDA_CALL(cudaEventSynchronize((seeding_finished[g_idx][s])));
                 CUDA_CALL(cudaEventDestroy(seeding_finished[g_idx][s]));
 
@@ -797,16 +809,11 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
                     queue_lock.unlock();
                     sw_beg_cv.notify_one();
                 }
-                // CUDA_CALL(cudaDeviceSynchronize());
-#else
-                result_threads[g_idx][s] = thread(handle_results, ref(seeding_finished[g_idx][s]), query, subj[s], task_host[g_idx][s], task_num_host[g_idx][s], ref(q_groups[g]), s_length[s], s, ref(res_s[g][s]), ref(sw_tasks[g][s]), pool, ref(rs[g_idx][s]));
-                cout << "=";
-#endif
+
             }
         }
 
-#ifdef USE_GPU_DIFFUSE
-        struct timeval schedule_beg, schedule_end;
+        struct timeval schedule_beg, schedule_end, schedule_reset;
         gettimeofday(&schedule_beg, NULL);
         produce_end = 1;
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
@@ -814,28 +821,28 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
         queue_lock.unlock();
         bw_finished = 0;
         produce_end = 0;
-       
-#endif
-        // CUDA_CALL(cudaStreamSynchronize(streams));
-        CUDA_CALL(cudaStreamSynchronize(sw_stream));
+        gettimeofday(&schedule_reset, NULL);
 
-#ifdef USE_GPU_DIFFUSE
+        // CUDA_CALL(cudaStreamSynchronize(streams));
+        // CUDA_CALL(cudaStreamSynchronize(streams));
+        // CUDA_CALL(cudaStreamSynchronize(sw_stream));
+        // CUDA_CALL(cudaStreamSynchronize(copy_stream));
+
         sw_pool->wait();
         consumer_thread.join();
         
         gettimeofday(&schedule_end, NULL);
-        cout << "synchronize Time: " << timeuse(schedule_beg, schedule_end) << endl;
-#endif
+        // cout << "synchronize:reset Time: " << timeuse(schedule_beg, schedule_reset) << endl;
+        // cout << "synchronize Time: " << timeuse(schedule_beg, schedule_end) << endl;
 
-        nvtxRangePop();
         gettimeofday(&t_end, NULL);
         time_prof.gpu_time += timeuse(t_start, t_end);
         group_time += timeuse(t_start, t_end);
-        cout << "GPU computing Time: " << timeuse(t_start, t_end) << endl;
-        
-#ifdef USE_GPU_DIFFUSE
+        // cout << "GPU computing Time: " << timeuse(t_start, t_end) << endl;
+
         struct timeval report_start_time, report_end_time;
         gettimeofday(&report_start_time, NULL);
+        thread report_thread(Schedule_report, ref(report_task_queue), pool);
 
         for (int g = g_begin; g < g_begin + n_groups; g++)
         {
@@ -875,9 +882,8 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
         
 
         gettimeofday(&report_end_time, NULL);
-        cout << "Report Time: " << timeuse(report_start_time, report_end_time) << endl;
-#endif
-
+        time_prof.cpu_time +=  timeuse(report_start_time, report_end_time);
+        // cout << "Report Time: " << timeuse(report_start_time, report_end_time) << endl;
 
         if (g_begin == 0)
         {
@@ -909,10 +915,9 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
         gettimeofday(&tt_start, NULL);
 
         int hsp_count = 0;
-#ifdef USE_GPU_DIFFUSE
+
         pool->wait();
         report_thread.join();
-#endif
 
         for (int s = 0; s < NUM_STREAM; s++)
         {
@@ -921,16 +926,9 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
                 
                 int g_idx = g - g_begin;
                 // printf("@@ g=%d|s=%d res_s[g][s]%d task_num_host %d\n",g,s,res_s[g][s].size(),*task_num_host[g_idx][s]);
-#ifndef USE_GPU_DIFFUSE
-                result_threads[g_idx][s].join();
-#endif
 
                 hsp_count += res_s[g][s].size();
                 cout << "=";
-#ifndef USE_GPU_DIFFUSE
-                for (auto &r : rs[g_idx][s])
-                    r.get();
-#endif
                 proceed_result(res, ref(res_s[g][s]), query, subj[s], q_groups[g], s_name[s], s_offsets[s], sn_offsets[s], s_num[s], total_db_size);
                 cout << "=";
             }
@@ -1024,7 +1022,7 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
 
     pool = new ThreadPool(num_threads);
-    ThreadPool* sw_pool = new ThreadPool(56);
+    ThreadPool* sw_pool = new ThreadPool(num_threads);
 
     gettimeofday(&t_end, NULL);
     cout << "Prepare Time: " << timeuse(t_start, t_end) << endl;
@@ -1080,15 +1078,15 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     CUDA_CALL(cudaMemcpy(query_dev, query, q_length, cudaMemcpyHostToDevice));
     cudaStream_t streams;
     cudaStream_t malloc_streams;
-    cudaStream_t sw_stream;
+    cudaStream_t sw_stream, copy_stream;
     CUDA_CALL(cudaStreamCreate(&streams));
     CUDA_CALL(cudaStreamCreate(&malloc_streams));
     CUDA_CALL(cudaStreamCreate(&sw_stream));
-#ifdef USE_GPU_DIFFUSE
+    CUDA_CALL(cudaStreamCreate(&copy_stream));
     
-    int direct_matrixSize = (max_len_query+1) * MaxBW;
-    int threadsPerBlock = 64;  // 根据 shared memory 限制调整
-    int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
+    // int direct_matrixSize = (max_len_query+1) * MaxBW;
+    // int threadsPerBlock = 128;  // 根据 shared memory 限制调整
+    // int blocks = (BatchSize + threadsPerBlock - 1) / threadsPerBlock;
     
     int* BLOSUM62_d;
     int* score_d[n_groups][NUM_STREAM][MaxNumBatch], *score_h[n_groups][NUM_STREAM][MaxNumBatch];
@@ -1132,7 +1130,6 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d, 26 * 26 * sizeof(int), sw_stream));
     CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d, BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,sw_stream));
 
-#endif
     
 
     for (int d = 0; d < argv_dbs.size(); d++)
@@ -1159,7 +1156,7 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
                             q_num_dev, q_idx_dev, q_lengths_dev, index_size_dev, threshold_dev, q_offset_dev,
                             kHashTableCapacity_host, kHashTableOffset_host,
                             s_name, s_offsets, sn_offsets, s_num,
-                            query_dev, ref(streams), ref(malloc_streams), ref(sw_stream),
+                            query_dev, ref(streams), ref(malloc_streams), ref(sw_stream), 
                             BLOSUM62_d,
                             BLOSUM62,
                             score_d, score_h,\
@@ -1233,10 +1230,6 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
 
 
-    #ifdef USE_GPU_DIFFUSE
-    // delete sw_pool;
-    // free(rd); 
-    // free(rt); 
     for(int g = 0; g < n_groups; ++ g){
 
         for(int s = 0; s < NUM_STREAM; ++ s){
@@ -1261,10 +1254,10 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
     CUDA_CALL(cudaFreeAsync(BLOSUM62_d, sw_stream)); 
 
-#endif
     CUDA_CALL(cudaStreamDestroy(streams));
     CUDA_CALL(cudaStreamDestroy(malloc_streams));
     CUDA_CALL(cudaStreamDestroy(sw_stream));
+    CUDA_CALL(cudaStreamDestroy(copy_stream));
     
     for (int g = 0; g < n_groups; g++)
     {
