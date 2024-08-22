@@ -427,8 +427,8 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
     // int cpu_cnt = 0, gpu_cnt = 0;
     // struct timeval cpu_schedule_beg, cpu_schedule_end, schedule_beg, schedule_end;
     // gettimeofday(&schedule_beg, NULL);
-    cudaStream_t copy_stream;
-    cudaStreamCreate(&copy_stream);
+    // cudaStream_t copy_stream;
+    // cudaStreamCreate(&copy_stream);
     while(true){
         
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
@@ -469,18 +469,18 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
                                 direction_matrix, tiled_direction_matrix, cur.band_width,
                                 cur.BLOSUM62_d);
             cudaEvent_t kernels_done;
-            CUDA_CALL(cudaEventCreate(&kernels_done));
-            cudaEventRecord(kernels_done, cur.stream);
-            cudaStreamWaitEvent(copy_stream, kernels_done, 0);
-            cudaEventDestroy(kernels_done);
+            // CUDA_CALL(cudaEventCreate(&kernels_done));
+            // cudaEventRecord(kernels_done, cur.stream);
+            // cudaStreamWaitEvent(copy_stream, kernels_done, 0);
+            // cudaEventDestroy(kernels_done);
 
-            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, copy_stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,copy_stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, cur.stream));
             
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,cur.stream));
             
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
             
@@ -508,11 +508,12 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
         // banded_sw_task_queue.pop();
         // printf("end task\n");
     }
+    sw_pool->wait();
+    // cudaStreamSynchronize(copy_stream);
+    // cudaStreamDestroy(copy_stream);
     // gettimeofday(&schedule_end, NULL);
     // printf("schedule CPU schedule Time: %f,  CPU cnt: %d, GPU cnt %d\n", CPU_time, cpu_cnt , gpu_cnt );
     // printf("schedule Time: %f\n", timeuse(schedule_beg, schedule_end));
-    cudaStreamSynchronize(copy_stream);
-    cudaStreamDestroy(copy_stream);
     return;
 }
 void _report(report_task& cur){
@@ -825,10 +826,10 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
 
         // CUDA_CALL(cudaStreamSynchronize(streams));
         // CUDA_CALL(cudaStreamSynchronize(streams));
-        // CUDA_CALL(cudaStreamSynchronize(sw_stream));
+        CUDA_CALL(cudaStreamSynchronize(sw_stream));
         // CUDA_CALL(cudaStreamSynchronize(copy_stream));
 
-        sw_pool->wait();
+        
         consumer_thread.join();
         
         gettimeofday(&schedule_end, NULL);
@@ -1003,6 +1004,16 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     //     cout << (double)kHashTableCapacity_host[i] * sizeof(KeyValue) * NUM_STREAM / (1073741824) << " ";
     // }
     // cout << "GB, total size = " << (double)kHashTableOffset_host[n_query] * sizeof(KeyValue) * NUM_STREAM / (1073741824) << " GB." << endl;
+    pool = new ThreadPool(num_threads);
+    ThreadPool* sw_pool = new ThreadPool(num_threads);
+
+    gettimeofday(&t_end, NULL);
+    cout << "Prepare Time: " << timeuse(t_start, t_end) << endl;
+
+    TimeProfile time_prof;
+
+    struct timeval c_start, c_end, overhead_beg, overhead_end;
+    gettimeofday(&overhead_beg, NULL);
 
     uint32_t n_groups = q_groups.size();
     if (n_groups > MAX_GROUPS_PER_ROUND)
@@ -1021,16 +1032,6 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
         }
     }
 
-    pool = new ThreadPool(num_threads);
-    ThreadPool* sw_pool = new ThreadPool(num_threads);
-
-    gettimeofday(&t_end, NULL);
-    cout << "Prepare Time: " << timeuse(t_start, t_end) << endl;
-
-    TimeProfile time_prof;
-
-    struct timeval c_start, c_end;
-    gettimeofday(&c_start, NULL);
 
     CUDA_CALL(cudaMemcpyToSymbol(SEED_LENGTH, &seed_length, sizeof(int)));
     CUDA_CALL(cudaMemcpyToSymbol(QIT_WIDTH, &qit_width, sizeof(int)));
@@ -1129,9 +1130,9 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     }
     CUDA_CALL(cudaMallocAsync((void**)&BLOSUM62_d, 26 * 26 * sizeof(int), sw_stream));
     CUDA_CALL(cudaMemcpyAsync(BLOSUM62_d, BLOSUM62, 26 * 26 * sizeof(int),cudaMemcpyHostToDevice,sw_stream));
-
+    gettimeofday(&overhead_end,NULL);
     
-
+    gettimeofday(&c_start, NULL);
     for (int d = 0; d < argv_dbs.size(); d++)
     {
         string db_name(argv_dbs[d]);
@@ -1183,6 +1184,8 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     cout << "Load seqs name Time:\t" << time_prof.name_time << endl;
     cout << "Total Calculation Time:\t" << timeuse(c_start, c_end) << endl;
 
+    cout << "CUDA Mem Management Time:\t" << timeuse(overhead_beg, overhead_end) << endl;
+
     gettimeofday(&t_start, NULL);
 
     for (int g = 0; g < n_groups; g++)
@@ -1191,45 +1194,6 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
             CUDA_CALL(cudaFreeHost(task_host[g][s]));
             CUDA_CALL(cudaFreeHost(task_num_host[g][s]));
         }
-
-    gettimeofday(&t_end, NULL);
-    cout << "Free memory Time:\t" << timeuse(t_start, t_end) << endl;
-    gettimeofday(&t_start, NULL);
-
-    for (int i = 0; i < n_query; i++)
-    {
-        sort_heap(res_d[i].begin(), res_d[i].end(), [&](const SWResult &sw1, const SWResult &sw2)
-                  { return (sw1.e_value == sw2.e_value) ? (sw1.score > sw2.score) : (sw1.e_value < sw2.e_value); });
-    }
-
-    int outfmt;
-    get_arg("outfmt", outfmt, D_OUTFMT);
-    switch (outfmt)
-    {
-    case 0:
-        output_result_tabular(argv_out, res_d, query, q_offsets, q_names);
-        break;
-    case 1:
-        output_result_align(argv_out, res_d, query, q_offsets, q_names);
-        break;
-    case 2:
-        output_result_tabular(argv_out, res_d, query, q_offsets, q_names);
-        output_result_fa(argv_out + ".fasta", res_d, query, q_offsets, q_names);
-        break;
-    case 3:
-        output_result_cast(argv_out, res_d, query, q_offsets, q_names);
-        break;
-    case 4:
-        output_result_a3m(argv_out, res_d, query, q_offsets, q_names);
-        break;
-    case 5:
-        output_result_reduce(argv_out, res_d, query, q_offsets, q_names);
-        break;
-    default:
-        break;
-    }
-
-
     for(int g = 0; g < n_groups; ++ g){
 
         for(int s = 0; s < NUM_STREAM; ++ s){
@@ -1291,6 +1255,46 @@ void blastp(string argv_query, vector<string> argv_dbs, string argv_out)
     pool->wait();
     delete pool;
     delete sw_pool;
+
+    gettimeofday(&t_end, NULL);
+    cout << "Free memory Time:\t" << timeuse(t_start, t_end) << endl;
+    gettimeofday(&t_start, NULL);
+
+    for (int i = 0; i < n_query; i++)
+    {
+        sort_heap(res_d[i].begin(), res_d[i].end(), [&](const SWResult &sw1, const SWResult &sw2)
+                  { return (sw1.e_value == sw2.e_value) ? (sw1.score > sw2.score) : (sw1.e_value < sw2.e_value); });
+    }
+
+    int outfmt;
+    get_arg("outfmt", outfmt, D_OUTFMT);
+    switch (outfmt)
+    {
+    case 0:
+        output_result_tabular(argv_out, res_d, query, q_offsets, q_names);
+        break;
+    case 1:
+        output_result_align(argv_out, res_d, query, q_offsets, q_names);
+        break;
+    case 2:
+        output_result_tabular(argv_out, res_d, query, q_offsets, q_names);
+        output_result_fa(argv_out + ".fasta", res_d, query, q_offsets, q_names);
+        break;
+    case 3:
+        output_result_cast(argv_out, res_d, query, q_offsets, q_names);
+        break;
+    case 4:
+        output_result_a3m(argv_out, res_d, query, q_offsets, q_names);
+        break;
+    case 5:
+        output_result_reduce(argv_out, res_d, query, q_offsets, q_names);
+        break;
+    default:
+        break;
+    }
+
+
+    
 
     gettimeofday(&t_end, NULL);
 
