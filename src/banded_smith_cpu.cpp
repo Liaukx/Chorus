@@ -616,20 +616,117 @@ void smith_waterman_kernel(const int idx, SWResult *res, SWTasks *sw_task)
 
 // mu1.unlock();
 // }
-
-
 void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
-               size_t* q_start,
-               size_t* c_start,
+               size_t* q_start, size_t* c_start,
                std::vector<SWResult>& res_s,
-            //    uint32_t* num_task,
                int* score, Task* task, const char* query, const char* target)
 {
-    // res_s.resize(*num_task);
-    cigar_to_index(idx, begin, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
-    generate_report(idx, begin, res_s, score, task, query, target);
-    assert(res_s.size());
+    SWResult& result = res_s[begin + idx];
+    result.score = score[idx];
+    result.num_q = task[idx].q_id;
+    result.align_length = 0;
+    result.gaps = 0;
+    result.gap_open = 0;
+    result.mismatch = 0;
+    result.positive = 0;
+
+    // std::vector<size_t> q_res, s_res;
+    size_t cur_q = q_start[idx];
+    size_t cur_c = c_start[idx];
+    
+    // Process CIGAR string
+    for (int i = 0; i < cigar_len[idx]; ++i) {
+        int count = cigar_cnt[idx * MaxAlignLen + i];
+        char op = cigar_op[idx * MaxAlignLen + i];
+        int d = ((op=='M')?DIAG:((op=='D')?TOP:LEFT));
+
+        result.align_length += count;
+        
+        for(int j = 0; j < count; ++ j){
+
+            int tmp_q = (d&0x01) ? (cur_q) : -1;
+            int tmp_c = (d&0x02) ? (cur_c) : -1;
+            res_s[begin + idx].q_res.push_back(tmp_q);
+            res_s[begin + idx].s_res.push_back(tmp_c);
+
+            //TOP 01b, left 10b, diag 11b
+            //DIAG : cur_q -= 1, cur_c -= 1
+            //TOP : cur_q -= 1, 
+            //LEFT : cur_c -= 1
+            cur_q -= (d == DIAG || d == TOP);
+            cur_c -= (d == LEFT || d == DIAG); // Decrement cur_c if LEFT (10b)
+        }
+        
+        if (op != 'M') {
+            result.gap_open += count;
+        }
+    }
+    
+    // Reverse vectors as in original implementation
+    reverse(res_s[begin + idx].q_res.begin(),res_s[begin + idx].q_res.end());
+    reverse(res_s[begin + idx].s_res.begin(),res_s[begin + idx].s_res.end());
+    
+    
+    // Generate alignment strings and calculate statistics
+    std::string q_seq, s_seq, s_ori, match;
+    for (size_t i = 0; i < result.align_length; ++i) {
+        char q_char = (res_s[begin + idx].q_res[i] != (size_t)-1) ? (query[res_s[begin + idx].q_res[i]] + 65) : '-';
+        char s_char = (res_s[begin + idx].s_res[i] != (size_t)-1) ? (get_char(target, res_s[begin + idx].s_res[i]) + 65) : '-';
+        
+        q_seq += q_char;
+        s_seq += s_char;
+        
+        if (s_char != '-') {
+            if (s_char == 95) s_char = '*';
+            s_ori += s_char;
+        }
+        
+        if (q_char != '-' && s_char != '-') {
+            if (q_char == s_char) {
+                match += q_char;
+            } else {
+                match += ' ';
+                result.mismatch++;
+            }
+            
+            if (BLOSUM62[(q_char - 65) * 26 + (s_char - 65)] > 0) {
+                result.positive++;
+                if (q_char != s_char) match[match.length() - 1] = '+';
+            }
+        } else {
+            match += ' ';
+        }
+    }
+    
+    result.n_identity = result.align_length - result.mismatch;
+    result.p_identity = (1 - (double)result.mismatch / result.align_length) * 100;
+    result.bitscore = (E_lambda * result.score - log(E_k)) / 0.69314718055995;
+
+    if (has_must_include && !check_include(s_ori)) {
+        result.report = false;
+        return;
+    }
+
+    if (detailed_alignment) {
+        result.q = q_seq;
+        result.s = s_seq;
+        result.s_ori = s_ori;
+        result.match = match;
+    }
 }
+
+// void cigar_to_index_and_report(size_t idx, int begin, int* cigar_len, char* cigar_op, int* cigar_cnt,
+//                size_t* q_start,
+//                size_t* c_start,
+//                std::vector<SWResult>& res_s,
+//             //    uint32_t* num_task,
+//                int* score, Task* task, const char* query, const char* target)
+// {
+//     // res_s.resize(*num_task);
+//     cigar_to_index(idx, begin, cigar_len, cigar_op, cigar_cnt, q_start, c_start, res_s);
+//     generate_report(idx, begin, res_s, score, task, query, target);
+//     assert(res_s.size());
+// }
 
 
 

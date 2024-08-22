@@ -427,8 +427,8 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
     // int cpu_cnt = 0, gpu_cnt = 0;
     // struct timeval cpu_schedule_beg, cpu_schedule_end, schedule_beg, schedule_end;
     // gettimeofday(&schedule_beg, NULL);
-    // cudaStream_t copy_stream;
-    // cudaStreamCreate(&copy_stream);
+    cudaStream_t copy_stream;
+    cudaStreamCreate(&copy_stream);
     while(true){
         
         std::unique_lock<std::mutex> queue_lock(queue_mutex);
@@ -469,18 +469,18 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
                                 direction_matrix, tiled_direction_matrix, cur.band_width,
                                 cur.BLOSUM62_d);
             cudaEvent_t kernels_done;
-            // CUDA_CALL(cudaEventCreate(&kernels_done));
-            // cudaEventRecord(kernels_done, cur.stream);
-            // cudaStreamWaitEvent(copy_stream, kernels_done, 0);
-            // cudaEventDestroy(kernels_done);
+            CUDA_CALL(cudaEventCreate(&kernels_done));
+            cudaEventRecord(kernels_done, cur.stream);
+            cudaStreamWaitEvent(copy_stream, kernels_done, 0);
+            cudaEventDestroy(kernels_done);
 
-            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.max_score_h, cur.max_score_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost, copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.q_end_idx_h, cur.q_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.s_end_idx_h, cur.s_end_idx_d, BatchSize * sizeof(size_t), cudaMemcpyDeviceToHost, copy_stream));
             
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,cur.stream));
-            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,cur.stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_op_h, cur.cigar_op_d, BatchSize * sizeof(char) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_cnt_h, cur.cigar_cnt_d, BatchSize * sizeof(int) * MaxAlignLen, cudaMemcpyDeviceToHost,copy_stream));
+            CUDA_CALL(cudaMemcpyAsync(cur.cigar_len_h, cur.cigar_len_d, BatchSize * sizeof(int), cudaMemcpyDeviceToHost,copy_stream));
             
             // cudaEventRecord(cur.copies_done, cur.copy_stream);
             
@@ -509,7 +509,7 @@ void Schedule(queue<banded_sw_task>& banded_sw_task_queue, ThreadPool* sw_pool){
         // printf("end task\n");
     }
     sw_pool->wait();
-    // cudaStreamSynchronize(copy_stream);
+    cudaStreamSynchronize(copy_stream);
     // cudaStreamDestroy(copy_stream);
     // gettimeofday(&schedule_end, NULL);
     // printf("schedule CPU schedule Time: %f,  CPU cnt: %d, GPU cnt %d\n", CPU_time, cpu_cnt , gpu_cnt );
@@ -826,7 +826,7 @@ void search_db_batch(ThreadPool* sw_pool, uint32_t max_len_query, char *query, c
 
         // CUDA_CALL(cudaStreamSynchronize(streams));
         // CUDA_CALL(cudaStreamSynchronize(streams));
-        CUDA_CALL(cudaStreamSynchronize(sw_stream));
+        // CUDA_CALL(cudaStreamSynchronize(sw_stream));
         // CUDA_CALL(cudaStreamSynchronize(copy_stream));
 
         
